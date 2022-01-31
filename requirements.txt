@@ -1,0 +1,8 @@
+geopandas==0.10.2
+jupyterlab==3.2.8
+matplotlib==3.5.1
+momepy==0.5.2
+torch==1.10.2
+torch-geometric==2.0.3
+torch-scatter==2.0.9
+torch-sparse==0.6.12
