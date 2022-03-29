@@ -1,8 +1,13 @@
 # Notebook outputs
 checkpoint.pt
+models
+datasets
+runs
 
 # Jupyter
 .ipynb_checkpoints
+cache
+__pycache__
 
 # Space Syntax dataset
 OpenMapping-gb-v1_gpkg
