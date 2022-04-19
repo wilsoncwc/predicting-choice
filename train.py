@@ -2,11 +2,13 @@ import copy
 import math
 import time
 import numpy as np
+import pandas as pd
 
 import torch
 import torch_geometric.transforms as T
 from torch_geometric.loader import DataLoader   
 from torch.utils.tensorboard import SummaryWriter
+from IPython.display import display
 
 from sklearn.metrics import roc_auc_score, average_precision_score
 from sklearn.metrics import f1_score, precision_score, recall_score
@@ -111,16 +113,17 @@ def train(model, optimizer, loader, variational, beta=1):
 
 
 @torch.no_grad()
-def test(model, loader):
+def test(model, loader, curve=False):
     model.eval()
-    auc_tot = 0
-    ap_tot = 0
+    auc_roc = []
+    ap_pr = []
     for data in loader:
         z = model.encode(data.x, data.edge_index)
-        auc, ap = model.test(z, data.pos_edge_label_index, data.neg_edge_label_index)
-        auc_tot += auc
-        ap_tot += ap
-    return auc_tot / len(loader), ap_tot / len(loader)
+        test_fn = model.test_curves if curve else model.test
+        auc, ap = test_fn(z, data.pos_edge_label_index, data.neg_edge_label_index)
+        auc_roc.append(auc)
+        ap_pr.append(ap)
+    return np.mean(auc_roc, axis=0), np.mean(ap_pr, axis=0)
 
 
 def run(
@@ -154,13 +157,14 @@ def run(
     if seed:
         seed_everything(seed)
     if type(dataset) is tuple:
-        # Assume already processed
+        # Assume already processed via process_dataset
         train_dataset, test_dataset, train_loader, test_loader = dataset
     else:
         train_dataset, test_dataset, train_loader, test_loader = process_dataset(dataset, **data_process_args)
     in_channels = train_dataset[0].num_node_features
     model_args['in_channels'] = in_channels
-    
+
+    # Format the output filename to which models and results are saved
     model_args['variational'] = model_args['variational'] if 'variational' in model_args else False
     mod = 'V' if model_args['variational'] else ''
     mod += 'L' if 'linear' in model_args and model_args['linear'] else ''
@@ -186,28 +190,48 @@ def run(
         result_dict = {metric: [] for metric in metric_dict}
         for epoch in range(1, epochs + 1):
             total_loss, recon_loss, kl_loss = train(model, optimizer, train_loader, model_args['variational'], beta)
+            # Transductive metrics
             train_auc, train_ap = test(model, train_dataset)
+            # Inductive metrics
             test_auc, test_ap = test(model, test_dataset)
-            if schedule_lr:
-                scheduler.step(total_loss)
             
+            # Logging
             result_dict['total_loss'].append(total_loss)
-            result_dict['recon_loss'].append(recon_loss)
-            result_dict['kl_loss'].append(kl_loss)
+            if model_args['variational']:
+                result_dict['recon_loss'].append(recon_loss)
+                result_dict['kl_loss'].append(kl_loss)
             result_dict['train_auc'].append(train_auc)
             result_dict['train_ap'].append(train_ap)
             result_dict['test_auc'].append(test_auc)
             result_dict['test_ap'].append(test_ap)
+             
+            if schedule_lr:
+                # Reduce LR if the target metric decreased
+                scheduler.step(result_dict[save_best_model_metric][-1])
+                
             if epoch % print_every == 0:
                 sec_per_epoch = (time.time() - start_time) / print_every
                 start_time = time.time()
                 print(f'Epoch {epoch:03d} ({sec_per_epoch:.2f}s/epoch): '
                 f'Train AUC: {train_auc:.4f}, Train AP: {train_ap:.4f},'
                 f'Test AUC: {test_auc:.4f}, Test AP: {test_ap:.4f}')
+        
+        result_df = pd.DataFrame.from_records([{
+            key: result_dict[key][-1]
+            for key in result_dict
+            if len(result_dict[key]) > 0
+        }])
+        print(f'Iteration {i} results:')
+        display(result_df)
+        roc_curve, pr_curve = test(model, test_dataset, curve=True)
+        result_dict['roc_curve'] = roc_curve
+        result_dict['pr_curve'] = pr_curve
+        
         results.append(result_dict)
         models.append(model)
 
     if output_tb:
+        # Output average run losses to tensorboard
         path = f'{project_root}/runs/{run_str}'
         print(f'Writing to {path}')
         writer = SummaryWriter(path)
@@ -233,14 +257,16 @@ def test_model_inductive(processed_dataset, model):
     test_result_dict = {}
     for test_data in processed_dataset:
         result_dict = {}
-        # test_data = process_dataset([data], verbose=False, split_labels=False, 
-        #                             **model.data_process_args)[0][0]
+        # Obtain and save latent representation
         z = model.encode(test_data.x, test_data.edge_index)
         result_dict['z'] = z.detach().cpu()
+        
+        # Perform prediction
         out_enc_edges = model.decode(z, test_data.edge_index).view(-1)
         out_test_edges = model.decode(z, test_data.edge_label_index).view(-1)
-
         out = torch.cat([out_enc_edges, out_test_edges]).detach().cpu()
+        
+        # Create binary classification label
         y_label = torch.ones(test_data.edge_index.size(1))
         edge_label = torch.cat([y_label, test_data.edge_label.detach().cpu()])
 
@@ -248,17 +274,12 @@ def test_model_inductive(processed_dataset, model):
         result_dict['auc'] = roc_auc_score(edge_label, out.detach())
         result_dict['ap'] = average_precision_score(edge_label, out.detach())
         
-        # Post-threshold metrics
-        #Calculate best threshold for edge labelling that gives the highest F1
+        # Post-threshold metrics:
+        # Calculate best threshold for edge labelling that gives the highest F1
         thresholded_pred = (out > GLOBAL_THRESHOLD).float()
         result_dict['precision'] = precision_score(edge_label, thresholded_pred)
         result_dict['recall'] = recall_score(edge_label, thresholded_pred)
         result_dict['f1'] = f1_score(edge_label, thresholded_pred)
-        # precision, recall, thresholds = roc_curve(edge_label, out.detach())
-        # gmeans = np.sqrt(tpr * (1-fpr))
-        # best_threshold = thresholds[np.argmax(gmeans)]
-        # thresholded_pred = (out > best_threshold).float
-        # result_dict['precision'], result_dict['recall'], result_dict['thresholds'] = precision_recall_curve(edge_label, thresholded_pred)
         
         test_result_dict[test_data.place] = result_dict
     return test_result_dict
@@ -294,7 +315,7 @@ def run_single(places, full_dataset, run_args={}, save_path=''):
         # Append final metrics of each run
         for result in results:
             for key in result:
-                if key in data:
+                if key in data and len(result[key] > 0):
                     data[key].append(result[key][-1])
                 else:
                     data[key] = [result[key][-1]]

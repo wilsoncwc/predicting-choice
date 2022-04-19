@@ -3,6 +3,8 @@ import fiona
 import geopandas as gpd
 import networkx as nx
 import osmnx as ox
+
+from torch_geometric.utils.convert import from_networkx
 from itertools import chain
 from utils.constants import dataset_root, osmnx_buffer, ignore_fields
 from utils.constants import included_places, full_dataset_label
@@ -12,12 +14,12 @@ loaded_graphs={}
 
 full_gdf = None
 
-def load_gdf(place, ignore_fields=ignore_fields, verbose=False): #(W, S, E, N)
+def load_gdf(place, ignore_fields=ignore_fields, reset_gdf=False, verbose=False): #(W, S, E, N)
     """
     Load the geodataframe (gdf) corresponding to a local authority (SSx) or any place (OSMnx) with caching.
     """
     global full_gdf
-    if full_gdf is None:
+    if full_gdf is None or reset_gdf:
         full_gdf = gpd.read_file(f'{dataset_root}/OpenMapping-gb-v1_gpkg/gpkg/ssx_openmapping_gb_v1.gpkg',
                                  ignore_fields=ignore_fields)
     if place in included_places:
@@ -71,7 +73,7 @@ def process_graph(g, feature_fields=[]):
         d['v'] = v
     return g
 
-def load_graph(place, feature_fields=[], reload=True, verbose=False):
+def load_graph(place, feature_fields=[], force_connected=True, reload=True, verbose=False):
     if verbose:
         print(f'Loading graph of {place}...')
     key = (place)
@@ -83,6 +85,8 @@ def load_graph(place, feature_fields=[], reload=True, verbose=False):
     else:
         gdf = load_gdf(place, verbose=verbose)
         G = momepy.gdf_to_nx(gdf, approach='primal', multigraph=False)
+        if force_connected:
+            G = G.subgraph(max(nx.connected_components(G), key=len))
         G = process_graph(G, feature_fields)
 
         if verbose:

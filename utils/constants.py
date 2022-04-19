@@ -61,7 +61,7 @@ included_places = ['Isle of Wight','Wycombe','Enfield','Slough','South Bucks','H
     'Sevenoaks','Medway','Nottingham','Tamworth','Warwick','Dartford',
     'Surrey Heath','South Norfolk','Oldham','West Lindsey','Lambeth',
     'North Norfolk','Breckland','Broxtowe','Staffordshire Moorlands',
-    'Worthing' "King's Lynn and West Norfolk" 'Kirklees','Calderdale',
+    'Worthing',"King's Lynn and West Norfolk",'Kirklees','Calderdale',
     'Great Yarmouth','Crawley','East Devon','Mid Devon','St Edmundsbury',
     'Mid Suffolk','East Cambridgeshire','Forest Heath','North Devon',
     'Fenland','North Dorset','Bracknell Forest','Haringey','Coventry',
