@@ -15,8 +15,8 @@ meridian_fields = ['meridian_id', 'meridian_gid', 'meridian_code',
                    'meridian_indicator', 'meridian_class', 'meridian_class_scale']
 census_geom_fields = ['wz11cd', 'lsoa11nm', 'msoa11nm',
                       'oa11cd', 'lsoa11cd', 'msoa11cd'] # Allowed: lad11cd, lad11nm
-misc_fields = ['id']
-ignore_fields = meridian_fields + census_geom_fields + misc_fields
+fields_to_ignore = meridian_fields + census_geom_fields + ['id', 'accident_count']
+ignore_non_accident_field = meridian_fields + census_geom_fields + ['id']
 
 # Included fields
 unnorm_feature_fields = ['metres', 'choice2km', 'nodecount2km', 'integration2km',
@@ -26,11 +26,30 @@ rank_fields = ['choice2kmrank', 'choice10kmrank','integration10kmrank', 'integra
 log_fields = ['choice2kmlog','choice10kmlog','choice100kmlog']
 all_feature_fields = unnorm_feature_fields + rank_fields + log_fields
 
+# Field Combinations
+km2_fields = ['choice2km', 'nodecount2km', 'integration2km']
+km10_fields = ['choice10km', 'nodecount10km', 'integration10km']
+km100_fields = ['choice100km', 'nodecount100km', 'integration100km']
+choice_fields = ['choice2km', 'choice10km', 'choice100km']
+integration_fields = ['integration2km', 'integration10km', 'integration100km']
+nodecount_fields = ['nodecount2km', 'nodecount10km', 'nodecount100km']
+
+# Number of point geometries for line features (dual graph)
+NUM_GEOM = 5
+
 # Post-processing features
-feats = ['metres', 'choice2km', 'nodecount2km', 'integration2km', 'choice10km',
+primal_feats = ['metres', 'choice2km', 'nodecount2km', 'integration2km', 'choice10km',
          'nodecount10km', 'integration10km', 'choice100km', 'nodecount100km',
          'integration100km', 'choice2kmrank', 'choice10kmrank', 'integration10kmrank',
          'integration2kmrank', 'choice2kmlog', 'choice10kmlog', 'choice100kmlog', 'x', 'y']
+
+geom_feats = ['metres', 'mid_x', 'mid_y'] + \
+    [f'geom{i}_{ax}' for i in range(NUM_GEOM) for ax in ('x', 'y')]
+dual_feats = geom_feats + \
+    ['choice2km', 'nodecount2km', 'integration2km', 'choice10km', 'nodecount10km',
+     'integration10km', 'choice100km', 'nodecount100km', 'integration100km',
+     'choice2kmrank', 'choice10kmrank', 'integration10kmrank', 'integration2kmrank',
+     'choice2kmlog', 'choice10kmlog', 'choice100kmlog']
 
 # All SSx local authorities
 included_places = ['Isle of Wight','Wycombe','Enfield','Slough','South Bucks','Hillingdon',
@@ -120,8 +139,19 @@ metric_dict = {
 
 default_model = {
     'out_channels': 10,
-    'model_type': 'gat',
+    'model_type': 'gain',
     'num_layers': 2
 }
 
 GLOBAL_THRESHOLD = 0.6
+
+# Filenames of saved datasets
+saved_data_files = {
+    ('No Bounds', "['metres', 'choice2km', 'nodecount2km', 'integration2km', 'choice10km', 'nodecount10km', 'integration10km', 'choice100km', 'nodecount100km', 'integration100km', 'choice2kmrank', 'choice10kmrank', 'integration10kmrank', 'integration2kmrank', 'choice2kmlog', 'choice10kmlog', 'choice100kmlog']", 'accident_count', 'dual', True, True, 50, False): 'clean_accident_full_pyg.pt',
+    ('No Bounds', "['metres', 'choice2km', 'nodecount2km', 'integration2km', 'choice10km', 'nodecount10km', 'integration10km', 'choice100km', 'nodecount100km', 'integration100km', 'choice2kmrank', 'choice10kmrank', 'integration10kmrank', 'integration2kmrank', 'choice2kmlog', 'choice10kmlog', 'choice100kmlog']", 'accident_count', 'dual', True, True, 10, False): 'clean_accident_10m_full_pyg.pt',
+    ('No Bounds', "['metres', 'choice2km', 'nodecount2km', 'integration2km', 'choice10km', 'nodecount10km', 'integration10km', 'choice100km', 'nodecount100km', 'integration100km', 'choice2kmrank', 'choice10kmrank', 'integration10kmrank', 'integration2kmrank', 'choice2kmlog', 'choice10kmlog', 'choice100kmlog', 'meridian_class']", 'accident_count', 'dual', False, True, 15, False): 'raw_accident_15m_full_pyg.pt',
+    ('No Bounds', "['metres', 'choice2km', 'nodecount2km', 'integration2km', 'choice10km', 'nodecount10km', 'integration10km', 'choice100km', 'nodecount100km', 'integration100km', 'choice2kmrank', 'choice10kmrank', 'integration10kmrank', 'integration2kmrank', 'choice2kmlog', 'choice10kmlog', 'choice100kmlog']", 'accident_count', 'dual', True, False, 50, False): 'clean_accident_full_unconn_pyg.pt',
+    ('No Bounds', "['metres', 'choice2km', 'nodecount2km', 'integration2km', 'choice10km', 'nodecount10km', 'integration10km', 'choice100km', 'nodecount100km', 'integration100km', 'choice2kmrank', 'choice10kmrank', 'integration10kmrank', 'integration2kmrank', 'choice2kmlog', 'choice10kmlog', 'choice100kmlog']", 'meridian_class', 'dual', True, True, 50, False): 'clean_meridian_full_pyg.pt',
+    ('No Bounds', "['metres', 'choice2km', 'nodecount2km', 'integration2km', 'choice10km', 'nodecount10km', 'integration10km', 'choice100km', 'nodecount100km', 'integration100km', 'choice2kmrank', 'choice10kmrank', 'integration10kmrank', 'integration2kmrank', 'choice2kmlog', 'choice10kmlog', 'choice100kmlog']", 'meridian_class', 'dual', True, False, 50, False): 'clean_meridian_full_unconn_pyg.pt',
+    ('No Bounds', "['metres', 'choice2km', 'nodecount2km', 'integration2km', 'choice10km', 'nodecount10km', 'integration10km', 'choice100km', 'nodecount100km', 'integration100km', 'choice2kmrank', 'choice10kmrank', 'integration10kmrank', 'integration2kmrank', 'choice2kmlog', 'choice10kmlog', 'choice100kmlog']", 'meridian_class', 'dual', False, True, 50, False): 'raw_meridian_full_conn_pyg.pt',
+}

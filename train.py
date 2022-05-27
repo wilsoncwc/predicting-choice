@@ -13,16 +13,17 @@ from IPython.display import display
 from sklearn.metrics import roc_auc_score, average_precision_score
 from sklearn.metrics import f1_score, precision_score, recall_score
 
-from models import init_model
+from models.init_model import init_model
+from utils.utils import summarize_results
 from utils.seed import seed_everything
 from utils.constants import project_root, dataset_root
-from utils.constants import feats, rank_fields, metric_dict, default_model
+from utils.constants import rank_fields, metric_dict, default_model
 from utils.constants import GLOBAL_THRESHOLD
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def process_dataset(full_dataset, split=0.8, split_labels=True, hold_out_edge_ratio=0.2,
-                    neg_sampling_ratio=-1, batch_size=32, include_feats=feats,
+                    neg_sampling_ratio=-1, batch_size=32, include_feats=[],
                     add_deg_feats=False, deg_after_split=False, verbose=False):
     """
         Set split < 0 to indicate that only the first graph should be used for training
@@ -41,11 +42,12 @@ def process_dataset(full_dataset, split=0.8, split_labels=True, hold_out_edge_ra
         test_idx = idx[split_idx:]
     
     # Remove non included features
-    if include_feats != feats:
-        feat_idx = torch.tensor([feats.index(feat) for feat in include_feats])
+    node_attrs = dataset[0].node_attrs
+    if include_feats != node_attrs:
+        feat_idx = torch.tensor([node_attrs.index(feat) for feat in include_feats])
         for data in dataset:
             data.num_nodes = data.x.size(0)
-            data.x = torch.index_select(data.x, 1, feat_idx) \
+            data.x = torch.index_select(data.x, 1, feat_idx).float() \
                      if len(feat_idx) > 0 else None
     
     # If no features are selected, inject degree profile as features
@@ -65,10 +67,13 @@ def process_dataset(full_dataset, split=0.8, split_labels=True, hold_out_edge_ra
         deg_xform = T.Compose([T.LocalDegreeProfile(), T.ToDevice(device)])
         train_dataset = [deg_xform(data) for data in train_dataset]
         test_dataset = [deg_xform(data) for data in test_dataset]
-    
+
     if verbose:
+        positive = sum([len(data.pos_edge_label_index) for data in test_dataset])
+        negative = sum([len(data.neg_edge_label_index) for data in test_dataset])
         print(f'Number of training graphs: {len(train_dataset)}')
         print(f'Number of test graphs: {len(test_dataset)}')
+        print(f'Positive rate: {positive / (positive + negative)}')
 
     # Load graphs into dataloader
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True) \
@@ -111,48 +116,69 @@ def train(model, optimizer, loader, variational, beta=1):
     loss_kl /= len(loader.dataset)
     return loss_tot, loss_recon, loss_kl
 
-
 @torch.no_grad()
-def test(model, loader, curve=False):
+def test(model, loader):
     model.eval()
-    auc_roc = []
-    ap_pr = []
+    aucs = []
+    aps = []
     for data in loader:
         z = model.encode(data.x, data.edge_index)
-        test_fn = model.test_curves if curve else model.test
-        auc, ap = test_fn(z, data.pos_edge_label_index, data.neg_edge_label_index)
-        auc_roc.append(auc)
-        ap_pr.append(ap)
-    return np.mean(auc_roc, axis=0), np.mean(ap_pr, axis=0)
+        auc, ap = model.test(z, data.pos_edge_label_index, data.neg_edge_label_index)
+        aucs.append(auc)
+        aps.append(ap)
+    return np.mean(aucs, axis=0), np.mean(aps, axis=0)
 
+@torch.no_grad()
+def test_enhanced(model, data):
+    model.eval()
+    z = model.encode(data.x, data.edge_index)
+    f1 = model.test_enhanced(data)
+    return f1
 
+@torch.no_grad()
+def test_curve(model, data):
+    model.eval()
+    z = model.encode(data.x, data.edge_index)
+    roc, pr = model.test_curves(z, data.pos_edge_label_index, data.neg_edge_label_index)
+    return roc, pr
+    
 def run(
     dataset,
     data_process_args={},
     model_args=default_model,
     seed=42,
+    test_inductive=True,
     num_iter=5,
     save_best_model=False,
-    save_best_model_metric='test_ap',
+    return_best_model=False,
+    save_best_model_metric='train_ap',
     output_tb=False,
     tag_tb='',
     epochs=1000,
     print_every=10,
     lr=0.01,
     schedule_lr=False,
-    beta=1 # only used for GVAE
+    min_lr=0.00001,
+    beta=1, # only used for GVAE
+    verbose=True
 ):
     """
         Trainer for batched graph train-test split.
-        data_process_args: dict of optional keywords including:
+        
+        Args:
+        data_process_args (dict): Optional keywords for data preprocessing/batching
             split, hold_out_edge_ratio, batch_size, include_feats, add_deg_feats
-        model_args: dict of optional keywords including:
-            out_channels: int - latent variable dimension,
-            model_type: str - type of gnn layer to use in the encoder,
-            distmult: bool - set to True for DistMult decoder, else default inner product
-            linear: bool - flag
-            variational: bool - flag
-            + parameters to pass to torch's BasicGNN models (jk, num_layers, etc.)
+        model_args (dict): Keyword arguments to modify the model including:
+            out_channels (int): Latent variable dimension.
+                (default: 10)
+            model_type (str, optional): Type of gnn layer to use in the encoder.
+                (default: 'gat')
+            distmult (bool, optional): To set the decoder to DistMult. Defaults 
+            to inner product.
+                (default: False)
+            linear (bool, optional): (default: False)
+            variational (bool, optional): (default False)
+            + Parameters to pass to torch's BasicGNN models (jk, num_layers, etc.)
     """
     if seed:
         seed_everything(seed)
@@ -169,31 +195,44 @@ def run(
     mod = 'V' if model_args['variational'] else ''
     mod += 'L' if 'linear' in model_args and model_args['linear'] else ''
     dist = '-dist' if 'distmult' in model_args and model_args['distmult'] else ''
-    add_deg_feats = data_process_args['add_deg_feats']
-    include_feats = data_process_args['include_feats']
+    
+    add_deg_feats = data_process_args.get('add_deg_feats', False)
+    include_feats = data_process_args.get('include_feats', [])
     tag_tb = f'{"deg+" if add_deg_feats else ""}{len(include_feats)}_{tag_tb}'
     model_tag = f'G{mod}AE_{model_args["out_channels"]}d_{model_args["model_type"]}{dist}'
     run_str = f'{model_tag}_{epochs}epochs_{lr}lr_{tag_tb}feats'
     
+    # Logging
     results = []
     models = []
-    start_time = time.time()
+    
     for i in range(1, num_iter + 1):
-        print(f'Running iteration {i} of expt {run_str}')
-        model = init_model(**model_args)
+        if verbose:
+            print(f'Running iteration {i} of expt {run_str}')
+        start_time = time.time()
+        epoch_start_time = start_time
+        
+        # Initialize a new model every iteration
+        model = init_model(verbose=verbose, **model_args)
         model = model.to(device)
         model.data_process_args = data_process_args
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
         if schedule_lr:
-            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min')
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=150, 
+                                                                   threshold=0.001, factor=0.5, verbose=True)
     
         result_dict = {metric: [] for metric in metric_dict}
+        if not test_inductive:
+            result_dict.pop('test_auc')
+            result_dict.pop('test_ap')
+        if not model_args['variational']:
+            result_dict.pop('recon_loss')
+            result_dict.pop('kl_loss')
+    
         for epoch in range(1, epochs + 1):
             total_loss, recon_loss, kl_loss = train(model, optimizer, train_loader, model_args['variational'], beta)
             # Transductive metrics
             train_auc, train_ap = test(model, train_dataset)
-            # Inductive metrics
-            test_auc, test_ap = test(model, test_dataset)
             
             # Logging
             result_dict['total_loss'].append(total_loss)
@@ -202,52 +241,75 @@ def run(
                 result_dict['kl_loss'].append(kl_loss)
             result_dict['train_auc'].append(train_auc)
             result_dict['train_ap'].append(train_ap)
-            result_dict['test_auc'].append(test_auc)
-            result_dict['test_ap'].append(test_ap)
+            
+            # Inductive metrics
+            if test_inductive:
+                test_auc, test_ap = test(model, test_dataset)
+                result_dict['test_auc'].append(test_auc)
+                result_dict['test_ap'].append(test_ap)
              
             if schedule_lr:
                 # Reduce LR if the target metric decreased
                 scheduler.step(result_dict[save_best_model_metric][-1])
                 
-            if epoch % print_every == 0:
-                sec_per_epoch = (time.time() - start_time) / print_every
-                start_time = time.time()
-                print(f'Epoch {epoch:03d} ({sec_per_epoch:.2f}s/epoch): '
-                f'Train AUC: {train_auc:.4f}, Train AP: {train_ap:.4f},'
-                f'Test AUC: {test_auc:.4f}, Test AP: {test_ap:.4f}')
+            if verbose and epoch % print_every == 0:
+                sec_per_epoch = (time.time() - epoch_start_time) / print_every
+                epoch_start_time = time.time()
+                epoch_feed = (f'Epoch {epoch:03d} ({sec_per_epoch:.2f}s/epoch): '
+                f'Train AUC: {train_auc:.4f}, Train AP: {train_ap:.4f}')
+                if test_inductive:
+                    epoch_feed += f',Test AUC: {test_auc:.4f}, Test AP: {test_ap:.4f}'
+                print(epoch_feed)
         
         result_df = pd.DataFrame.from_records([{
             key: result_dict[key][-1]
             for key in result_dict
             if len(result_dict[key]) > 0
         }])
-        print(f'Iteration {i} results:')
-        display(result_df)
-        roc_curve, pr_curve = test(model, test_dataset, curve=True)
-        result_dict['roc_curve'] = roc_curve
-        result_dict['pr_curve'] = pr_curve
         
+        sec_per_epoch = (time.time() - start_time) / epochs
+        if verbose:
+            print(f'Iteration {i} done, averaged {sec_per_epoch:.3f}s per epoch. Results:')
+            display(result_df)
+        # roc_curve, pr_curve = test_curve(model, )
+        # result_dict['roc_curve'] = roc_curve
+        # result_dict['pr_curve'] = pr_curve
+        result_dict['sec_per_epoch'] = sec_per_epoch
+        result_dict['model_details'] = model.__repr__()
         results.append(result_dict)
         models.append(model)
 
     if output_tb:
         # Output average run losses to tensorboard
         path = f'{project_root}/runs/{run_str}'
-        print(f'Writing to {path}')
+        if verbose:
+            print(f'Writing to {path}')
         writer = SummaryWriter(path)
-
+        
+        mean_result_dict = {}
         for metric in metric_dict:
-            mean_result = np.mean([res[metric] for res in results], axis=0)
-            for i, result in enumerate(mean_result):
-                writer.add_scalar(metric_dict[metric], result, i)
+            mean_result = np.mean([res[metric] for res in results if metric in res], axis=0)
+            if type(mean_result) == list:
+                for i, result in enumerate(mean_result):
+                    writer.add_scalar(metric_dict[metric], result, i)
+            elif type(mean_result) == float:
+                mean_result_dict[metric] = mean_result
+        
+        # Log run and model parameters
+        data_process_args['include_feats'] = ', '.join(data_process_args['include_feats'])
+        writer.add_hparams({**data_process_args, **model_args},
+                           mean_result_dict)
     
-    if save_best_model:
+    if save_best_model or return_best_model:
         results_best_metric = [res[save_best_model_metric][-1] for res in results]
         best_iteration = np.argmax(results_best_metric)
-        path = f'{project_root}/models/{run_str}.pt'
-        print(f'Saving model to {path}')
-        torch.save(models[best_iteration].state_dict(), path)
-    
+        if save_best_model:
+            path = f'{project_root}/saved_models/{run_str}.pt'
+            if verbose:
+                print(f'Saving model to {path}')
+            torch.save(models[best_iteration].state_dict(), path)
+        if return_best_model:
+            return models[best_iteration], results[best_iteration]
     return models, results
 
 def test_model_inductive(processed_dataset, model):
@@ -256,51 +318,82 @@ def test_model_inductive(processed_dataset, model):
     """
     test_result_dict = {}
     for test_data in processed_dataset:
-        result_dict = {}
         # Obtain and save latent representation
         z = model.encode(test_data.x, test_data.edge_index)
-        result_dict['z'] = z.detach().cpu()
-        
-        # Perform prediction
-        out_enc_edges = model.decode(z, test_data.edge_index).view(-1)
-        out_test_edges = model.decode(z, test_data.edge_label_index).view(-1)
-        out = torch.cat([out_enc_edges, out_test_edges]).detach().cpu()
+        result_dict = {'z': z.detach().cpu()}
         
         # Create binary classification label
-        y_label = torch.ones(test_data.edge_index.size(1))
-        edge_label = torch.cat([y_label, test_data.edge_label.detach().cpu()])
+        pos_y = z.new_ones(test_data.pos_edge_label_index.size(1))
+        neg_y = z.new_zeros(test_data.neg_edge_label_index.size(1))
+        y = torch.cat([pos_y, neg_y], dim=0)
+        
+        # Perform prediction
+        pos_pred = model.decode(z, test_data.pos_edge_label_index)
+        neg_pred = model.decode(z, test_data.neg_edge_label_index)
+        pred = torch.cat([pos_pred, neg_pred], dim=0)
+
+        y, pred = y.detach().cpu().numpy(), pred.detach().cpu().numpy()
 
         # Pre-threshold metrics
-        result_dict['auc'] = roc_auc_score(edge_label, out.detach())
-        result_dict['ap'] = average_precision_score(edge_label, out.detach())
+        result_dict['auc'] = roc_auc_score(y, pred)
+        result_dict['ap'] = average_precision_score(y ,pred)
         
         # Post-threshold metrics:
-        # Calculate best threshold for edge labelling that gives the highest F1
-        thresholded_pred = (out > GLOBAL_THRESHOLD).float()
-        result_dict['precision'] = precision_score(edge_label, thresholded_pred)
-        result_dict['recall'] = recall_score(edge_label, thresholded_pred)
-        result_dict['f1'] = f1_score(edge_label, thresholded_pred)
+        thresholded_pred = (pred > GLOBAL_THRESHOLD).astype(float)
+        result_dict['precision'] = precision_score(y, thresholded_pred)
+        result_dict['recall'] = recall_score(y, thresholded_pred)
+        result_dict['f1'] = f1_score(y, thresholded_pred)
         
         test_result_dict[test_data.place] = result_dict
     return test_result_dict
 
-def run_single(places, full_dataset, run_args={}, save_path=''):
+def run_all(dataset, run_args={}, save_path=''):
+    output_dict = {}
+    data_process_args = {
+        'split': 1, # indicates ALL data goes into train dataset (0 test)
+        'batch_size': run_args.pop('batch_size', 16),
+        'add_deg_feats': run_args.pop('add_deg_feats', False),
+        'deg_after_split': run_args.pop('deg_after_split', False),
+        'include_feats': run_args.pop('include_feats', rank_fields)
+    }
+    
+    data = process_dataset(dataset, **data_process_args)
+    
+    model, result = run(data,
+                        data_process_args, 
+                        test_inductive=False,
+                        return_best_model=True,
+                        **run_args)
+
+    print('Model training ended. Computing metrics...')
+    result = summarize_results([result])
+    
+    # Apply best performing model to every city
+    metrics = test_model_inductive(data[0], model)
+    combined = {**result, **metrics}
+    if save_path:
+        torch.save(combined, save_path)
+    return result, metrics
+        
+
+def run_single(places, full_dataset, run_args={}, save_path='', only_transductive=False):
     """
         Trainer for individual local authorities.
         Trains a model for each place in the list input 'places', obtaining transductive metrics.
         Tests each model on all other local authorities to obtain inductive metrics, and saves the average.
         'run_args' are passed to the main 'run' function, see above for possible arguments.
     """
-    single_data = {}
+    output_dict = {}
     data_process_args = {
-        'split': 0, # indicates only the first graph should be used for training
-        'batch_size': 32,
+        'split': 0, # indicates ALL data goes into test dataset (0 train)
+        'batch_size': run_args.pop('batch_size', 32),
         'add_deg_feats': run_args.pop('add_deg_feats', False),
         'deg_after_split': run_args.pop('deg_after_split', False),
         'include_feats': run_args.pop('include_feats', rank_fields)
     }
     _, test_dataset, _, test_loader = process_dataset(full_dataset, verbose=False, **data_process_args)
-    post_run_test_dataset = process_dataset(full_dataset, verbose=False, split_labels=False, **data_process_args)[1]
+    # post_run_test_dataset = process_dataset(full_dataset, verbose=False, split_labels=True, 
+                                            # **data_process_args)[1]
     for place in places:
         print(f'Training model on SSx data from {place}...')
         place_graph = next(data for data in test_dataset if data.place == place)
@@ -308,22 +401,33 @@ def run_single(places, full_dataset, run_args={}, save_path=''):
         train_loader = DataLoader(train_dataset, batch_size=1)
         dataset = train_dataset, test_dataset, train_loader, test_loader
         
-        models, results = run(dataset, data_process_args, **run_args)
+        models, results = run(dataset, data_process_args, 
+                              test_inductive=False, **run_args)
         
         print('Model training ended. Computing metrics...')
-        data = {}
         # Append final metrics of each run
-        for result in results:
-            for key in result:
-                if key in data and len(result[key] > 0):
-                    data[key].append(result[key][-1])
-                else:
-                    data[key] = [result[key][-1]]
-                
+        data = summarize_results(results)
+        
+        if only_transductive:
+            # Get filtered prediction metrics and auc/pr curves
+            data.update({'filtered_f1': [], 'roc': [], 'pr': []})
+            for model in models:
+                data['filtered_f1'].append(test_enhanced(model, place_graph))
+                roc, pr = test_curve(model, place_graph) 
+                data['roc'].append(roc)
+                data['pr'].append(roc)
+    
+            # Only output test metrics for transductive setting
+            output_dict[place] = data
+            if save_path:
+                print('Saving results...')
+                torch.save(output_dict, save_path)
+            continue
+            
         # Test models on every city and compute average over models
         test_dict = {}
         for model in models:
-            metrics = test_model_inductive(post_run_test_dataset, model)
+            metrics = test_model_inductive(test_dataset, model)
             for result_place in metrics:
                 result_metrics = metrics[result_place]
                 if result_place in test_dict:
@@ -334,9 +438,12 @@ def run_single(places, full_dataset, run_args={}, save_path=''):
                                         for metric_name, metric in result_metrics.items()}
         for result_place in test_dict:
             result_metrics = test_dict[result_place]
+            if result_place == place:
+                # Only save the encoded representation of the LA used for training
+                data['encoding'] = result_metrics['z']
+            del result_metrics['z']
+            
             for metric in result_metrics:
-                if metric == 'z':
-                    continue
                 result_metrics[metric] = sum(result_metrics[metric]) / len(result_metrics[metric])
         
         # Save transductive (same place) and inductive-average (over all places) metrics
@@ -349,11 +456,11 @@ def run_single(places, full_dataset, run_args={}, save_path=''):
             avg_dict[metric] /= len(test_dict)
         data['transductive'] = test_dict[place]
         data['inductive-avg'] = avg_dict
-
-        # data['tests'] = test_dict (Too big to be saved)
-        single_data[place] = data
-        print(single_data.keys())
+        data['inductive'] = test_dict
+        
+        output_dict[place] = data
         if save_path:
-            torch.save(single_data, save_path)
+            print(f'Saving results to {save_path}')
+            torch.save(output_dict, save_path)
 
-    return single_data
+    return output_dict

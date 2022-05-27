@@ -1,6 +1,6 @@
 # Notebook outputs
 checkpoint.pt
-models
+saved_models
 datasets
 runs
 

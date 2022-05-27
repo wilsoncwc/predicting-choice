@@ -16,26 +16,26 @@ def main():
     dataset = torch.load(f'{dataset_root}/ssx_dataset_connected.pt')
     places = [data.place for data in dataset]
     half = len(places) // 2
-    # places = places[half:]
-    places = ['Coventry']
+    places = places[half:]
     
     model_params = {
-        'model_type': 'gat',
+        'model_type': 'gain',
         'distmult': True,
         'out_channels': 10
     }
     run_hyperparams = {
         'seed': 42,
         'model_args': model_params,
-        'num_iter': 1,
+        'num_iter': 5,
         'lr': 0.01,
-        'epochs': 300,
+        'epochs': 2000,
+        'print_every': 10,
         'add_deg_feats': False,
+        'schedule_lr': False,
         'include_feats': ['integration2kmrank', 'integration10kmrank'],
-        'save_best_model': False
     }
-    run_single(places, dataset, run_args=run_hyperparams)
-               # save_path=f'{dataset_root}/link_pred_metrics_GATdistmult_iter1.pt')
+    run_single(places, dataset, run_args=run_hyperparams, only_transductive=True,
+               save_path=f'{dataset_root}/link_pred/transductive_metrics_primal_2.pt')
 
 if __name__ == '__main__':
     main()
