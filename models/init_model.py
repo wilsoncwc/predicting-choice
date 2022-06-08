@@ -3,6 +3,7 @@ from torch.nn import Linear, ModuleList
 from torch_geometric.nn import MLP, GCNConv, GATConv, SAGEConv, GraphConv, global_sort_pool
 from torch_geometric.nn.models import GCN, GraphSAGE, GIN, PNA
 from torch_geometric.nn import GAE, VGAE, InnerProductDecoder
+from coral_pytorch.layers import CoralLayer
 
 from sklearn.metrics import roc_curve, precision_recall_curve, roc_auc_score, average_precision_score, f1_score
 
@@ -96,7 +97,7 @@ class VariationalLinearEncoder(torch.nn.Module):
 class DistMultDecoder(torch.nn.Module):
     def __init__(self, hidden_channels, symm=True):
         super().__init__()
-        self.symm = symm
+        self.symm = symm # Set to True for undirected graphs
         self.weights = torch.nn.Parameter(torch.Tensor(hidden_channels, hidden_channels))
         self.reset_parameters()
 
@@ -173,7 +174,24 @@ class ModGAE(GAE, Mod):
 
 class ModVGAE(VGAE, Mod):
     pass
+    
 
+class CoralGNN(torch.nn.Module):
+    def __init__(self, model_type='gat', **model_kwargs):
+        super().__init__()
+        self.out_channels = model_kwargs['out_channels']
+        self.lin = CoralLayer(model_kwargs['hidden_channels'], self.out_channels)
+        
+        model_kwargs_ = {**model_kwargs}
+        model_kwargs_['out_channels'] = model_kwargs_['hidden_channels']
+        self.gnn = init_gnn_model(model_type, **model_kwargs_)
+        
+    def forward(self, x, edge_index):
+        gnn_out = self.gnn(x, edge_index)
+        logits = self.lin(gnn_out)
+        probas = torch.sigmoid(logits)
+        return logits, probas
+    
 
 def init_model(linear=False, variational=False, distmult=True, verbose=True, **model_args):
     decoder = InnerProductDecoder() if not distmult else DistMultDecoder(model_args['out_channels'])

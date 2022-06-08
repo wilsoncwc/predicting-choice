@@ -1,6 +1,7 @@
 # Directories to store generated data and metrics
 project_root = '/homes/wwc4618/predicting-choice'
 dataset_root = '/vol/bitbucket/wwc4618/datasets'
+save_graph_dict_path = f'{dataset_root}/saved_graphs/saved_data_files.pt'
 
 # SSx dataset constants
 full_dataset_label = 'No Bounds'
@@ -12,10 +13,10 @@ osmnx_buffer = 10000
 # Fields to ignore
 meridian_fields = ['meridian_id', 'meridian_gid', 'meridian_code',
                    'meridian_osodr', 'meridian_number', 'meridian_road_name',
-                   'meridian_indicator', 'meridian_class', 'meridian_class_scale']
+                   'meridian_indicator', 'meridian_class_scale']
 census_geom_fields = ['wz11cd', 'lsoa11nm', 'msoa11nm',
                       'oa11cd', 'lsoa11cd', 'msoa11cd'] # Allowed: lad11cd, lad11nm
-fields_to_ignore = meridian_fields + census_geom_fields + ['id', 'accident_count']
+fields_to_ignore = meridian_fields + census_geom_fields + ['id']
 ignore_non_accident_field = meridian_fields + census_geom_fields + ['id']
 
 # Included fields
@@ -125,6 +126,9 @@ included_places = ['Isle of Wight','Wycombe','Enfield','Slough','South Bucks','H
     'Tunbridge Wells','Maidstone','Cherwell','Oadby and Wigston','Rother',
     'Canterbury','Ashford','Thanet','Dover','Nuneaton and Bedworth']
 
+inductive_places = ['Sevenoaks', 'Tonbridge and Malling','Dartford', 'Gravesham',
+                    'Medway', 'Tunbridge Wells','Maidstone',
+                    'Canterbury','Ashford','Thanet','Dover', 'Swale']
 
 # Training constants
 metric_dict = {
@@ -144,14 +148,3 @@ default_model = {
 }
 
 GLOBAL_THRESHOLD = 0.6
-
-# Filenames of saved datasets
-saved_data_files = {
-    ('No Bounds', "['metres', 'choice2km', 'nodecount2km', 'integration2km', 'choice10km', 'nodecount10km', 'integration10km', 'choice100km', 'nodecount100km', 'integration100km', 'choice2kmrank', 'choice10kmrank', 'integration10kmrank', 'integration2kmrank', 'choice2kmlog', 'choice10kmlog', 'choice100kmlog']", 'accident_count', 'dual', True, True, 50, False): 'clean_accident_full_pyg.pt',
-    ('No Bounds', "['metres', 'choice2km', 'nodecount2km', 'integration2km', 'choice10km', 'nodecount10km', 'integration10km', 'choice100km', 'nodecount100km', 'integration100km', 'choice2kmrank', 'choice10kmrank', 'integration10kmrank', 'integration2kmrank', 'choice2kmlog', 'choice10kmlog', 'choice100kmlog']", 'accident_count', 'dual', True, True, 10, False): 'clean_accident_10m_full_pyg.pt',
-    ('No Bounds', "['metres', 'choice2km', 'nodecount2km', 'integration2km', 'choice10km', 'nodecount10km', 'integration10km', 'choice100km', 'nodecount100km', 'integration100km', 'choice2kmrank', 'choice10kmrank', 'integration10kmrank', 'integration2kmrank', 'choice2kmlog', 'choice10kmlog', 'choice100kmlog', 'meridian_class']", 'accident_count', 'dual', False, True, 15, False): 'raw_accident_15m_full_pyg.pt',
-    ('No Bounds', "['metres', 'choice2km', 'nodecount2km', 'integration2km', 'choice10km', 'nodecount10km', 'integration10km', 'choice100km', 'nodecount100km', 'integration100km', 'choice2kmrank', 'choice10kmrank', 'integration10kmrank', 'integration2kmrank', 'choice2kmlog', 'choice10kmlog', 'choice100kmlog']", 'accident_count', 'dual', True, False, 50, False): 'clean_accident_full_unconn_pyg.pt',
-    ('No Bounds', "['metres', 'choice2km', 'nodecount2km', 'integration2km', 'choice10km', 'nodecount10km', 'integration10km', 'choice100km', 'nodecount100km', 'integration100km', 'choice2kmrank', 'choice10kmrank', 'integration10kmrank', 'integration2kmrank', 'choice2kmlog', 'choice10kmlog', 'choice100kmlog']", 'meridian_class', 'dual', True, True, 50, False): 'clean_meridian_full_pyg.pt',
-    ('No Bounds', "['metres', 'choice2km', 'nodecount2km', 'integration2km', 'choice10km', 'nodecount10km', 'integration10km', 'choice100km', 'nodecount100km', 'integration100km', 'choice2kmrank', 'choice10kmrank', 'integration10kmrank', 'integration2kmrank', 'choice2kmlog', 'choice10kmlog', 'choice100kmlog']", 'meridian_class', 'dual', True, False, 50, False): 'clean_meridian_full_unconn_pyg.pt',
-    ('No Bounds', "['metres', 'choice2km', 'nodecount2km', 'integration2km', 'choice10km', 'nodecount10km', 'integration10km', 'choice100km', 'nodecount100km', 'integration100km', 'choice2kmrank', 'choice10kmrank', 'integration10kmrank', 'integration2kmrank', 'choice2kmlog', 'choice10kmlog', 'choice100kmlog']", 'meridian_class', 'dual', False, True, 50, False): 'raw_meridian_full_conn_pyg.pt',
-}

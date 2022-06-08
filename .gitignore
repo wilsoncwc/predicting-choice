@@ -1,8 +1,9 @@
 # Notebook outputs
-checkpoint.pt
+*.pt
+*.png
 saved_models
-datasets
 runs
+img
 
 # Jupyter
 .ipynb_checkpoints

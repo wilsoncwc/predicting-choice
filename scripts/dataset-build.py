@@ -11,8 +11,9 @@ sys.path.append(parent)
 import torch
 import pandas as pd
 import networkx as nx
+from utils.utils import remove_item
 from utils.load_geodata import load_graph, load_gdf
-from utils.constants import dataset_root, included_places, all_feature_fields
+from utils.constants import *
 
 
 def build_network_df():
@@ -89,24 +90,35 @@ def construct_ssx_dataset(places, **kwargs):
 
 
 def main():
+    all_feat_fields = [field for field in all_feature_fields]
     for agg in [
+        'min',
+        'max',
         'sum',
         'mean',
-        'max',
-        'min'
-        'std',
-        'median'
+        'median',
+        'std'
     ]:
-        dataset = construct_ssx_dataset(included_places, 
-                                        feature_fields=all_feature_fields, 
-                                        approach='primal', 
-                                        clean=False, 
-                                        agg=agg, 
-                                        verbose=True)
-        for data in dataset:
-            data.node_attrs = list(data.node_attrs)
-        torch.save(dataset, f'{dataset_root}/ssx_dataset_{agg}.pt')
-    
+        data = load_graph(remove_item(included_places, inductive_places),
+                          feature_fields=all_feature_fields,
+                          cat_fields=['meridian_class'],
+                          force_connected=True, 
+                          approach='dual',
+                          clean=True,
+                          clean_agg=agg,
+                          target_field='accident_count',
+                          verbose=True,
+                          save_file=f'accident_transductive_cut_{agg}_pyg.pt')
+        data = load_graph(inductive_places,
+                  feature_fields=all_feature_fields,
+                  cat_fields=['meridian_class'],
+                  force_connected=True, 
+                  approach='dual',
+                  clean=True,
+                  clean_agg=agg,
+                  target_field='accident_count',
+                  verbose=True,
+                  save_file=f'accident_inductive_cut_{agg}_pyg.pt')
 
 if __name__ == '__main__':
     main()
@@ -117,13 +129,44 @@ net_df = pd.read_pickle(f'{dataset_root}/network_df.pt')
 add_graph_stats(net_df)
 net_df.to_pickle(f'{dataset_root}/network_df_w_stats.pt')
 
-data = load_graph('No Bounds',
-    #                   feature_fields=all_feature_fields,
-    #                   cat_fields=['meridian_class'],
-    #                   force_connected=True, 
-    #                   approach='dual',
-    #                   clean=False,
-    #                   dist=15,
-    #                   target_field='accident_count')
-    # torch.save(data, f'{dataset_root}/raw_accident_15m_full_pyg.pt')
+
+    dataset = construct_ssx_dataset(included_places, 
+                                    feature_fields=all_feature_fields, 
+                                    approach='primal', 
+                                    clean=True, 
+                                    agg='min', 
+                                    verbose=True)
+    for data in dataset:
+        data.node_attrs = list(data.node_attrs)
+    torch.save(dataset, f'{dataset_root}/ssx_dataset_clean_min.pt')
+    
+    all_feat_fields = [field for field in all_feature_fields]
+    for agg in [
+        'max',
+        'min',
+        'sum',
+        'mean',
+        'median',
+        'std'
+    ]:
+        data = load_graph(remove_item(included_places, inductive_places),
+                          feature_fields=all_feature_fields,
+                          cat_fields=['meridian_class'],
+                          force_connected=True, 
+                          approach='dual',
+                          clean=True,
+                          clean_agg=agg,
+                          target_field='meridian_class',
+                          verbose=True,
+                          save_file=f'accident_transductive_cut_{agg}_pyg.pt')
+        data = load_graph(inductive_places,
+                  feature_fields=all_feature_fields,
+                  cat_fields=['meridian_class'],
+                  force_connected=True, 
+                  approach='dual',
+                  clean=True,
+                  clean_agg=agg,
+                  target_field='meridian_class',
+                  verbose=True,
+                  save_file=f'accident_inductive_cut_{agg}_pyg.pt')
 """

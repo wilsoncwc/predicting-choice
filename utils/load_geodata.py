@@ -1,6 +1,7 @@
 import momepy
 import fiona
 import copy
+import pickle
 import pandas as pd
 import geopandas as gpd
 import networkx as nx
@@ -13,10 +14,9 @@ from numbers import Number
 
 from utils.from_networkx import from_networkx
 from utils.gdf_to_nx import gdf_to_nx
-from utils.remove_false_nodes import remove_false_nodes
 from utils.utils import apply_agg, convert_categorical_features_to_one_hot
-from utils.constants import dataset_root, osmnx_buffer, fields_to_ignore
-from utils.constants import included_places, full_dataset_label, saved_data_files
+from utils.constants import dataset_root, save_graph_dict_path, osmnx_buffer, fields_to_ignore
+from utils.constants import included_places, full_dataset_label
 from utils.constants import NUM_GEOM
 # Projection
 from pyproj import CRS, Transformer
@@ -33,39 +33,47 @@ def proj_and_reorder_bounds(bbox):
 loaded_gdfs = {} # For OSMnx data
 loaded_graphs = {} # To cache graphs
 full_gdf = None
-full_gdf_ignore_fields = None
 accident_gdf = None
-    
+saved_data_files = pickle.load(open(save_graph_dict_path, "rb"))
+CLEAN_LIMIT = 10000000
 
 def load_gdf(place,
-             bbox=None, 
-             ignore_fields=fields_to_ignore, 
-             clean=True,
-             dist=50, # For accident gdf only
-             agg='mean', # For cleaned gdf only
-             verbose=False): #(W, S, E, N)
+             accident=False,
+             dist=50, # For accident_count not in ignore_fields 
+             verbose=True):
     """
-    Load the geodataframe (gdf) corresponding to a local authority (SSx) or any place (OSMnx) with caching.
-    """
-    global full_gdf, full_gdf_ignore_fields
+    Load the geodataframe (gdf) corresponding to a local authority (SSx)
+    or any place (OSMnx) with caching.
     
-    if full_gdf is None or full_gdf_ignore_fields != ignore_fields:
+    Args:
+        place (str or list[str]): Name of Local Authority, or 'No Bounds' for full graph, or
+            a list containing names. Also accepts a list of 4 floats representing
+            the bounding box [S, W, N, E]
+        dist (int, optional): Argument for join distance for accident count field
+        verbose (bool, optional): Outputs progression to the console
+    """
+    global full_gdf
+    
+    if full_gdf is None:
         if verbose:
             print('Reading SSx OpenMapping dataset, this may take a while...')
-        full_gdf = gpd.read_file(f'{dataset_root}/OpenMapping-gb-v1_gpkg/gpkg/ssx_openmapping_gb_v1.gpkg', ignore_fields=ignore_fields)
-        full_gdf_ignore_fields = ignore_fields.copy()
+        full_gdf = gpd.read_file(f'{dataset_root}/OpenMapping-gb-v1_gpkg/gpkg/ssx_openmapping_gb_v1.gpkg', ignore_fields=fields_to_ignore)
 
-    if 'accident_count' not in ignore_fields:
+    if accident:
         if verbose:
             print('Constructing SSx-Accident dataset, this may take a while...')
             # Combine SSx dataset with accidents data
-        full_gdf = construct_accident_dataset(ignore_fields=ignore_fields + ['accident_count'],
-                                              year_from=2011, year_to=2020, maxdist=dist)
+        full_gdf = construct_accident_dataset(gdf=full_gdf, year_from=2011, year_to=2020, maxdist=dist)
     
     if type(place) == list and len(place) == 4 and type(place[0]) == float:
         # Read bounding box
         ymin, ymax, xmin, xmax = proj_and_reorder_bounds(place)
         gdf = full_gdf.cx[xmin:xmax, ymin:ymax].copy()
+    elif type(place) == list:
+        if verbose:
+            print(f'Combining gdfs of {place}')
+        dfs = [full_gdf.query(f'lad11nm == "{place_}"').copy() for place_ in place]
+        gdf = gpd.GeoDataFrame(pd.concat(dfs, ignore_index=True), crs=dfs[0].crs)
     elif place in included_places:
         # Retrieve matching rows corresponding to the Local Authority
         if verbose:
@@ -76,7 +84,6 @@ def load_gdf(place,
     #     gdf = full_gdf.query(f'lad11nm == "{place}"').copy()
     elif place == full_dataset_label:
         # Read full UK dataset without boundaries
-        clean = False # Override this flag, takes very long
         gdf = full_gdf.copy()
     else:
         if place in loaded_gdfs:
@@ -94,23 +101,20 @@ def load_gdf(place,
         gdf = gdf.rename(columns={'length': 'metres'})
         loaded_gdfs[place] = gdf
         return gdf
-    
-    if clean:
-        gdf = remove_false_nodes(gdf, agg=agg)
+
     if verbose:
         print(f'{gdf.size} geometries retrieved from {place}')
     return gdf
 
 
-def construct_accident_dataset(gdf=None, ignore_fields=fields_to_ignore,
-                               place='No Bounds', year_from=2011, year_to=2020, maxdist=10):
+def construct_accident_dataset(gdf=None, year_from=2011, year_to=2020, maxdist=10):
     """
     Combines a gdf loaded from SSx from accident counts from 2011 to 2020
     Uses spatial join to compute the road segment corresponding to an accident's location. 
     Better accuracy achieved when done before geometry cleaning.
     """
     if gdf is None:
-        gdf = load_gdf(place, ignore_fields=ignore_fields, clean=(place != 'No Bounds'))
+        gdf = load_gdf('No Bounds', clean=False)
     
     # Load in accident csv in chunks: File is quite large
     iter_csv = pd.read_csv(f'{dataset_root}/dft-road-casualty-statistics-accidents.csv',
@@ -287,6 +291,7 @@ def add_latent_feats(G):
     nx.set_node_attributes(G, enc_dict)
     
 def clean_gdf(gdf, approach='primal', agg='sum'):
+    print('Cleaning graph with OSMnx...')
     G = gdf_to_nx(gdf, approach='primal', directed=True)
     for u, d in G.nodes(data=True):
         d['x'], d['y'] = u
@@ -308,12 +313,8 @@ def clean_gdf(gdf, approach='primal', agg='sum'):
     if approach == 'primal':
         return G
     line_G = nx.line_graph(G)
-    gsf = True
     for u, data in line_G.nodes(data=True):
         data.update(G.edges[u])
-        if gsf:
-            print(data)
-            gsf = False
     for u, v, data in line_G.edges(data=True):
         data.update(G.nodes[u[1]])
     return line_G
@@ -325,18 +326,31 @@ def load_graph(
     cat_fields=[],
     target_field=None,
     approach='primal',
-    agg='sum',
+    agg='min',
     clean=True,
-    clean_agg='sum',
+    clean_agg='min',
     dist=50, # applies only to accident count feature
     geoms=True, # applies only to dual graph
     force_connected=True,
     reset=False,
     return_nx=False,
+    save_file=None,
     verbose=False
 ):
+    """
+    Loads and preprocesses a PyTorch Geometric Data, or a networkx graph,
+    corresponding to `place`
+    
+    Args:
+        place (str or list[str]): Name of Local Authority, or 'No Bounds' for full graph, or
+            a list containing names. Also accepts a list of 4 floats representing
+            the bounding box [S, W, N, E]
+        ignore_fields (list[str], optional): List of fields to EXCLUDE from the output gdf
+        dist (int, optional): Argument for join distance for accident count field
+        verbose (bool, optional): Outputs progression to the console
+    """
     key = (str(place), str(feature_fields + cat_fields), target_field, approach,
-           clean, force_connected, dist, return_nx)
+           clean, clean_agg, force_connected, dist, return_nx)
     if verbose:
         print(f'Loading graph of {place} with key {key}...')
     if reset:
@@ -349,23 +363,25 @@ def load_graph(
         else: # PyG
             return loaded_graphs[key].clone()
     elif key in saved_data_files:
+        path = f'{dataset_root}/saved_graphs/{saved_data_files[key]}'
         if verbose:
-            print('Loaded graph from saved files.')
-        return torch.load(f'{dataset_root}/{saved_data_files[key]}')
+            print(f'Loaded graph from saved file at {path}')
+        return torch.load(path)
     
     ignore_fields = [field for field in fields_to_ignore \
                         if field not in [*feature_fields, *cat_fields, target_field]]
     if from_gdf is None:
-        gdf = load_gdf(place, verbose=verbose, ignore_fields=ignore_fields, clean=clean, agg=clean_agg, dist=dist)
+        accident = 'accident_count' in [*feature_fields, *cat_fields, target_field] 
+        gdf = load_gdf(place, verbose=verbose, accident=accident, dist=dist)
     else:
         gdf = from_gdf
 
     if len(cat_fields) > 0:
         gdf, new_cols = convert_categorical_features_to_one_hot(gdf, cat_fields)
-        feature_fields += new_cols
+        feature_fields = feature_fields + new_cols
         
-    if place == full_dataset_label and clean:
-        G = clean_gdf(gdf, approach=approach, agg=agg)
+    if clean:
+        G = clean_gdf(gdf, approach=approach, agg=clean_agg)
     else:
         G = momepy.gdf_to_nx(gdf, approach=approach, multigraph=False)
 
@@ -414,4 +430,13 @@ def load_graph(
     # Caching
     loaded_graphs[key] = g
     
+    # Saving
+    if save_file:
+        save_path = f'{dataset_root}/saved_graphs/{save_file}'
+        if verbose:
+            print(f'Saving graph to {save_path} and updating saved data dict...')
+        torch.save(g, save_path)
+        saved_data_files[key] = save_file
+        pickle.dump(saved_data_files, open(save_graph_dict_path, "wb"))
     return g.clone()
+    

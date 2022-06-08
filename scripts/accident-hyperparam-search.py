@@ -10,40 +10,96 @@ sys.path.append(parent)
 
 import torch
 from prediction import run
-from utils.constants import dataset_root, rank_fields, log_fields, all_feature_fields, geom_feats, unnorm_feature_fields, dual_feats
-def remove_item(xs, ys):
-    if type(ys) != list:
-        ys = [ys]
-    return [item for item in xs if item not in ys]
+from utils.constants import *
+from utils.utils import remove_item
 
 def main():
-    place = 'No Bounds'
+    print(f'Running training on GPU: {torch.cuda.get_device_name(0)}')
+    place = remove_item(included_places, inductive_places)
     result_dict = {}
-    filepath = f'{dataset_root}/accident_reg_pred_model_runs.pt'
-    for model_args in [
-        {'model_type': 'gcn', 'hidden_channels': 10, 'num_layers': 2},
-        {'model_type': 'gat', 'hidden_channels': 10, 'num_layers': 2},
-        {'model_type': 'sage', 'hidden_channels': 10, 'num_layers': 2},
-        {'model_type': 'gin', 'hidden_channels': 10, 'num_layers': 2},
-        {'model_type': 'gain', 'hidden_channels': 10, 'num_layers': 2},
+    filepath = f'{dataset_root}/accident_model_inductive_runs.pt'
+    for var_args in [
+        {'model_type': 'mlp', 'num_layers': 2},
+        {'model_type': 'mlp', 'num_layers': 3},
+        {'model_type': 'mlp', 'num_layers': 4},
+        {'model_type': 'gcn', 'num_layers': 2},
+        {'model_type': 'gat', 'num_layers': 2},
+        {'model_type': 'sage', 'num_layers': 2, 'aggr': 'min'},
+        {'model_type': 'sage', 'num_layers': 2, 'aggr': 'mean'},
+        {'model_type': 'sage', 'num_layers': 2, 'aggr': 'max'},
+        {'model_type': 'sage', 'num_layers': 2, 'aggr': 'add'},
+        {'model_type': 'gin',  'num_layers': 2},
+        {'model_type': 'gain', 'num_layers': 2},
     ]:
             data_process_args = {
                 'split_approach': 'cluster',
+                'num_parts': 512,
+                'batch_size': 16,
                 'include_feats': all_feature_fields,
-                'categorize': 'regression',
-                'clean': True
+                'categorize': 'multiclass',
+                'clean': True,
+                'agg': 'min'
             }
-            print(f'Testing {model_args}')
-            models, results = run(place, target_field='accident_count',
+            model_args = {
+                **var_args,
+                'hidden_channels': 20,
+            }
+            print(f'Testing {var_args}')
+            models, results = run(place,
+                                  inductive_place=inductive_places,
+                                  target_field='accident_count',
                                   data_process_args=data_process_args,
                                   model_args=model_args,
-                                  lr=0.005,
+                                  lr=0.01,
+                                  schedule_lr=True,
+                                  criteria_names=['Accuracy', 'MAE', 'MSE', 'RMSE'],
                                   num_iter=5)
-            result_dict[str(model_args)] = results
+            result_dict[str(var_args)] = results
             torch.save(result_dict, filepath)
             print(f'Saving to {filepath}')
     
 
 if __name__ == '__main__':
     main()
+
     
+    
+"""
+for agg in [
+        'max',
+        'min',
+        'sum',
+        'mean',
+        'median',
+        'std'
+    ]:
+
+['degree'],
+geom_feats,
+['choice2km', 'nodecount2km', 'integration2km'],
+['choice10km', 'nodecount10km', 'integration10km'],
+['choice100km', 'nodecount100km', 'integration100km'],
+['choice2km', 'choice10km', 'choice100km'],
+['integration2km', 'integration10km', 'integration100km'],
+['nodecount2km', 'nodecount10km', 'nodecount100km'],
+rank_fields,
+log_fields,
+geom_feats,
+unnorm_feature_fields,
+all_feature_fields,
+all_feature_fields + ['degree'],
+dual_feats
+
+{'model_type': 'mlp', 'num_layers': 2},
+{'model_type': 'mlp', 'num_layers': 3},
+{'model_type': 'mlp', 'num_layers': 4},
+{'model_type': 'gcn', 'num_layers': 2},
+{'model_type': 'gat', 'num_layers': 2},
+{'model_type': 'sage', 'num_layers': 2, 'aggr': 'min'},
+{'model_type': 'sage', 'num_layers': 2, 'aggr': 'mean'},
+{'model_type': 'sage', 'num_layers': 2, 'aggr': 'max'},
+{'model_type': 'sage', 'num_layers': 2, 'aggr': 'add'},
+{'model_type': 'gin',  'num_layers': 2},
+{'model_type': 'gain', 'num_layers': 2},
+
+"""

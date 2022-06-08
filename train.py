@@ -14,16 +14,17 @@ from sklearn.metrics import roc_auc_score, average_precision_score
 from sklearn.metrics import f1_score, precision_score, recall_score
 
 from models.init_model import init_model
-from utils.utils import summarize_results
+from utils.utils import *
 from utils.seed import seed_everything
 from utils.constants import project_root, dataset_root
 from utils.constants import rank_fields, metric_dict, default_model
 from utils.constants import GLOBAL_THRESHOLD
+from utils.normalize_features import NormalizeFeatures
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def process_dataset(full_dataset, split=0.8, split_labels=True, hold_out_edge_ratio=0.2,
-                    neg_sampling_ratio=-1, batch_size=32, include_feats=[],
+                    neg_sampling_ratio=-1, batch_size=32, include_feats=[], scaler='power',
                     add_deg_feats=False, deg_after_split=False, verbose=False):
     """
         Set split < 0 to indicate that only the first graph should be used for training
@@ -41,6 +42,11 @@ def process_dataset(full_dataset, split=0.8, split_labels=True, hold_out_edge_ra
         train_idx = idx[:split_idx]
         test_idx = idx[split_idx:]
     
+    # Adds Local Degree Profile
+    if 'degree' in include_feats:
+        add_deg_feats = True
+        include_feats = remove_item(include_feats, 'degree')
+        
     # Remove non included features
     node_attrs = dataset[0].node_attrs
     if include_feats != node_attrs:
@@ -54,7 +60,7 @@ def process_dataset(full_dataset, split=0.8, split_labels=True, hold_out_edge_ra
     # else, normalize the features
     neg_sampling_ratio = neg_sampling_ratio if neg_sampling_ratio >= 0 else 1 / hold_out_edge_ratio
     transform = T.Compose([
-        T.NormalizeFeatures(),
+        NormalizeFeatures(scaler=scaler),
         T.LocalDegreeProfile() if add_deg_feats and not deg_after_split else (lambda x: x),
         T.ToDevice(device),
         T.RandomLinkSplit(num_val=0, num_test=0, disjoint_train_ratio=hold_out_edge_ratio,
@@ -376,7 +382,8 @@ def run_all(dataset, run_args={}, save_path=''):
     return result, metrics
         
 
-def run_single(places, full_dataset, run_args={}, save_path='', only_transductive=False):
+def run_single(places, full_dataset, run_args={}, save_path='',
+               summarize=True, only_transductive=False, enhanced=True):
     """
         Trainer for individual local authorities.
         Trains a model for each place in the list input 'places', obtaining transductive metrics.
@@ -394,8 +401,8 @@ def run_single(places, full_dataset, run_args={}, save_path='', only_transductiv
     _, test_dataset, _, test_loader = process_dataset(full_dataset, verbose=False, **data_process_args)
     # post_run_test_dataset = process_dataset(full_dataset, verbose=False, split_labels=True, 
                                             # **data_process_args)[1]
-    for place in places:
-        print(f'Training model on SSx data from {place}...')
+    for idx, place in enumerate(places):
+        print(f'Training model on SSx data from {place} ({idx + 1}/{len(places)})...')
         place_graph = next(data for data in test_dataset if data.place == place)
         train_dataset = [place_graph] # train on a single graph only
         train_loader = DataLoader(train_dataset, batch_size=1)
@@ -404,18 +411,20 @@ def run_single(places, full_dataset, run_args={}, save_path='', only_transductiv
         models, results = run(dataset, data_process_args, 
                               test_inductive=False, **run_args)
         
-        print('Model training ended. Computing metrics...')
+        print(f'Model training ended for {place} ({idx + 1}/{len(places)}). Computing metrics...')
         # Append final metrics of each run
-        data = summarize_results(results)
-        
+        data = summarize_results(results) if summarize else {'results': results}
+            
         if only_transductive:
             # Get filtered prediction metrics and auc/pr curves
             data.update({'filtered_f1': [], 'roc': [], 'pr': []})
             for model in models:
-                data['filtered_f1'].append(test_enhanced(model, place_graph))
+                if enhanced:
+                    data['filtered_f1'].append(test_enhanced(model, place_graph))
+                auc, ap = test(model, [place_graph])
                 roc, pr = test_curve(model, place_graph) 
                 data['roc'].append(roc)
-                data['pr'].append(roc)
+                data['pr'].append(pr)
     
             # Only output test metrics for transductive setting
             output_dict[place] = data

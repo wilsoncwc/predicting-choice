@@ -1,4 +1,4 @@
-# https://github.com/Bjarten/early-stopping-pytorch/blob/master/pytorchtools.py
+# Adapted from https://github.com/Bjarten/early-stopping-pytorch/blob/master/pytorchtools.py
 import numpy as np
 import torch
 
@@ -51,3 +51,9 @@ class EarlyStopping:
             self.trace_func(f'Validation loss decreased ({self.val_loss_min:.6f} --> {val_loss:.6f}).  Saving model ...')
         torch.save(model.state_dict(), self.path)
         self.val_loss_min = val_loss
+        
+    def load_checkpoint(self, model):
+        '''Loads model from saved checkpoint. Input model is used as the loader'''
+        saved_state_dict = torch.load(self.path)
+        model.load_state_dict(saved_state_dict)
+        return model

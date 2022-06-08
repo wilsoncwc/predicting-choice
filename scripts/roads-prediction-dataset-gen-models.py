@@ -13,7 +13,7 @@ from train import run_single
 from utils.constants import dataset_root
 
 def main():
-    dataset = torch.load(f'{dataset_root}/ssx_dataset_connected.pt')
+    dataset = torch.load(f'{dataset_root}/ssx_dataset_clean_min.pt')
     places = [data.place for data in dataset]
     half = len(places) // 2
     places = places[half:]
@@ -31,11 +31,11 @@ def main():
         'epochs': 2000,
         'print_every': 10,
         'add_deg_feats': False,
-        'schedule_lr': False,
+        'schedule_lr': True,
         'include_feats': ['integration2kmrank', 'integration10kmrank'],
     }
     run_single(places, dataset, run_args=run_hyperparams, only_transductive=True,
-               save_path=f'{dataset_root}/link_pred/transductive_metrics_primal_2.pt')
+               save_path=f'{dataset_root}/link_pred/transductive_clean_min_primal_2.pt')
 
 if __name__ == '__main__':
     main()

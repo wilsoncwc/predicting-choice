@@ -10,19 +10,26 @@ sys.path.append(parent)
 
 import torch
 from train import run, run_all
-from utils.constants import dataset_root
+from utils.constants import *
 
 def main():
+    out_file = f'{dataset_root}/model_runs/link_pred_clean_min_feat_runs.pt'
+    dataset = torch.load(f'{dataset_root}/ssx_dataset_clean_min.pt')
     result_dict = {}
     for var in [
-        'ssx_dataset_max',
-        'ssx_dataset_min',
-        'ssx_dataset_sum',
-        'ssx_dataset_mean',
-        'ssx_dataset_median',
-        'ssx_dataset_std'
+        ['degree'],
+        ['choice2km', 'nodecount2km', 'integration2km'],
+        ['choice10km', 'nodecount10km', 'integration10km'],
+        ['choice100km', 'nodecount100km', 'integration100km'],
+        ['choice2km', 'choice10km', 'choice100km'],
+        ['integration2km', 'integration10km', 'integration100km'],
+        ['nodecount2km', 'nodecount10km', 'nodecount100km'],
+        ['choice2kmrank', 'choice10kmrank'],
+        ['integration2kmrank', 'integration10kmrank'],
+        rank_fields,
+        unnorm_feature_fields,
+        all_feature_fields,
     ]:
-        dataset = torch.load(f'{dataset_root}/{var}.pt')
         model_args = {
             'out_channels': 10,
             'model_type': 'gain',
@@ -30,7 +37,7 @@ def main():
             'distmult': True,
         }
         proc_args = {
-            'include_feats': ['integration2kmrank', 'integration10kmrank'],
+            'include_feats': var,
             'add_deg_feats': False
         }
         print(f'Testing {var}...')
@@ -43,8 +50,9 @@ def main():
                             schedule_lr=False,
                             output_tb=False,
                             save_best_model=False)
-        result_dict[var] = results
-        torch.save(result_dict, f'{dataset_root}/model_runs/raw_agg_runs.pt')
+        result_dict[strb(var)] = results
+        torch.save(result_dict, out_file)
+        print(f'Saved results to {out_file}')
 
 if __name__ == '__main__':
     main()

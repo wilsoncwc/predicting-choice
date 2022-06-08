@@ -10,42 +10,45 @@ sys.path.append(parent)
 
 import torch
 from prediction import run
-from utils.constants import dataset_root, rank_fields, log_fields, all_feature_fields, geom_feats, unnorm_feature_fields, dual_feats
-def remove_item(xs, ys):
-    if type(ys) != list:
-        ys = [ys]
-    return [item for item in xs if item not in ys]
+from utils.constants import *
+from utils.utils import remove_item
 
 def main():
-    place = 'No Bounds'
+    print(f'Running training on GPU: {torch.cuda.get_device_name(0)}')
+    place = remove_item(included_places, inductive_places)
     result_dict = {}
-    filepath = f'{dataset_root}/meridian_class_pred_loader_runs.pt'
+    filepath = f'{project_root}/meridian_inductive_model_runs.pt'
     for var_args in  [
-        { 'split_approach': 'cluster', 'batch_size': 8 },
-        { 'split_approach': 'cluster', 'batch_size': 16 },
-        { 'split_approach': 'cluster', 'batch_size': 32 },
-        { 'split_approach': 'cluster', 'batch_size': 64 },
-        { 'split_approach': 'cluster', 'batch_size': 128 },
-        { 'split_approach': 'cluster', 'batch_size': 256 },
-        { 'split_approach': 'cluster', 'batch_size': 512 },
+        {'model_type': 'mlp', 'num_layers': 2},
+        {'model_type': 'mlp', 'num_layers': 3},
+        {'model_type': 'mlp', 'num_layers': 4},
+        {'model_type': 'gcn', 'num_layers': 2},
+        {'model_type': 'gat', 'num_layers': 2},
+        {'model_type': 'sage', 'num_layers': 2, 'aggr': 'min'},
+        {'model_type': 'sage', 'num_layers': 2, 'aggr': 'mean'},
+        {'model_type': 'sage', 'num_layers': 2, 'aggr': 'add'},
+        {'model_type': 'gin',  'num_layers': 2},
+        {'model_type': 'gain', 'num_layers': 2},
     ]:
             data_process_args = {
-                'split_approach': 'cluster',
-                'include_feats': all_feature_fields,
-                'add_deg_feats': True,
+                'split_approach': 'neighbor',
+                'batch_size': 4096,
+                'include_feats': unnorm_feature_fields,
                 'clean': False,
-                **var_args
+                # **var_args
             }
             model_args = {
-                'model_type': 'gain',
-                'hidden_channels': 20,
-                'num_layers': 2,
+                **var_args,
+                'hidden_channels': 20
             }
-            print(f'Testing {model_args}')
-            models, results = run(place, target_field='meridian_class',
+            print(f'Testing {var_args}')
+            models, results = run(place,
+                                  inductive_place=inductive_places,
+                                  target_field='meridian_class',
                                   data_process_args=data_process_args,
                                   model_args=model_args,
-                                  lr=0.005,
+                                  schedule_lr=True,
+                                  lr=0.01,
                                   num_iter=5)
             result_dict[str(var_args)] = results
             torch.save(result_dict, filepath)
@@ -105,15 +108,32 @@ all_feature_fields,
 all_feature_fields + ['degree'],
 dual_feats
 
+{'model_type': 'mlp', 'num_layers': 2},
+{'model_type': 'mlp', 'num_layers': 3},
+{'model_type': 'mlp', 'num_layers': 4},
+{'model_type': 'gcn', 'num_layers': 2},
+{'model_type': 'gat', 'num_layers': 2},
+{'model_type': 'sage', 'num_layers': 2, 'aggr': 'min'},
+{'model_type': 'sage', 'num_layers': 2, 'aggr': 'mean'},
+{'model_type': 'sage', 'num_layers': 2, 'aggr': 'max'},
+{'model_type': 'sage', 'num_layers': 2, 'aggr': 'add'},
+{'model_type': 'gin',  'num_layers': 2},
+{'model_type': 'gain', 'num_layers': 2},
+    
+{ 'split_approach': 'cluster', 'num_parts': 512, 'batch_size': 2 },
+{ 'split_approach': 'cluster', 'num_parts': 512, 'batch_size': 4 },
+{ 'split_approach': 'cluster', 'num_parts': 512, 'batch_size': 8 },
+{ 'split_approach': 'cluster', 'num_parts': 1024, 'batch_size': 1 },
+{ 'split_approach': 'cluster', 'num_parts': 1024, 'batch_size': 2 },
+{ 'split_approach': 'cluster', 'num_parts': 1024, 'batch_size': 4 },
+{ 'split_approach': 'cluster', 'num_parts': 1024, 'batch_size': 8 },
+    
+{ 'split_approach': 'neighbor', 'batch_size': 100 },
+{ 'split_approach': 'neighbor', 'batch_size': 1000 },
+{ 'split_approach': 'neighbor', 'batch_size': 10000 },
+{ 'split_approach': 'saint', 'batch_size': 100 },
+{ 'split_approach': 'saint', 'batch_size': 1000 },
+{ 'split_approach': 'saint', 'batch_size': 10000 },
+{ 'split_approach': 'none' }
 
- [
-        {'model_type': 'mlp', 'hidden_channels': 10, 'num_layers': 2},
-        {'model_type': 'mlp', 'hidden_channels': 10, 'num_layers': 3},
-        {'model_type': 'mlp', 'hidden_channels': 10, 'num_layers': 4},
-        {'model_type': 'gcn', 'hidden_channels': 10, 'num_layers': 2},
-        {'model_type': 'gat', 'hidden_channels': 10, 'num_layers': 2},
-        {'model_type': 'sage', 'hidden_channels': 10, 'num_layers': 2},
-        {'model_type': 'gin', 'hidden_channels': 10, 'num_layers': 2},
-        {'model_type': 'gain', 'hidden_channels': 10, 'num_layers': 2},
-    ]
 """

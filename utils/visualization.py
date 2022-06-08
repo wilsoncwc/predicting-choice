@@ -1,6 +1,7 @@
 from utils.load_geodata import load_graph
 import matplotlib.pyplot as plt
 import networkx as nx
+import numpy as np
 import momepy
 
 def visualize_graph(place, approach='primal', feature=None, title=None, save_path=None, ax=None):
@@ -33,6 +34,35 @@ def visualize_nx(graph, ax=None, **kwargs):
     nx.draw(graph, {n:[n[0], n[1]] for n in list(graph.nodes)}, ax=ax, **kwargs)
     
 
+def plot_loss_curve(losses, label, ax=None, color=None, show_std=True):
+    if ax is None:
+        _, ax = plt.subplots(1, 1, figsize=(10, 10))
+        ax.set_title('Validation Loss over training')
+        ax.set_xlabel('Epochs')
+        ax.set_ylabel('Validation Loss')
+    
+    epochs = np.arange(1, len(losses[0]) + 1)
+    losses_mean = np.mean(losses, axis=0)
+    losses_std = np.std(losses, axis=0)
+    
+    if color is None:
+        color = 'g'
+    # Plot learning curve
+    if show_std:
+        ax.fill_between(
+            epochs,
+            losses_mean - losses_std,
+            losses_mean + losses_std,
+            alpha=0.3,
+            color=color,
+        )
+    ax.plot(
+        epochs, losses_mean, "o-", color=color, label=label
+    )
+    ax.legend(loc="best")
+
+    return ax
+    
 def plot_multiple_roc_pr(place, rocs, prs):
     f, axs = plt.subplots(1, 2, figsize=(20, 10))
     
