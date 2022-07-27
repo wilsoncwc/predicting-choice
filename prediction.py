@@ -16,9 +16,7 @@ import momepy
 import fiona
 import scipy as sp
 import matplotlib.pyplot as plt
-from IPython.display import display
 from numbers import Number
-from functools import partial
 
 import torch
 import torch.nn as nn
@@ -28,57 +26,22 @@ import torch_geometric.transforms as T
 from torch_geometric.loader import DataLoader, ClusterData, ClusterLoader, NeighborLoader, GraphSAINTRandomWalkSampler, ShaDowKHopSampler
 from coral_pytorch.dataset import levels_from_labelbatch, proba_to_label
 from coral_pytorch.losses import coral_loss
-
-from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score, matthews_corrcoef, r2_score, mean_absolute_error, mean_squared_error
-from imblearn.metrics import macro_averaged_mean_absolute_error
 from sklearn.preprocessing import LabelEncoder, FunctionTransformer
 
 from models.init_model import init_gnn_model, CoralGNN
+from utils import *
 from utils.early_stopping import EarlyStopping
-from utils.utils import remove_item
-from utils.seed import seed_everything
 from utils.normalize_features import NormalizeFeatures
-from utils.load_geodata import load_graph, load_gdf
-from utils.constants import rank_fields, all_feature_fields, geom_feats, ignore_non_accident_field
+from utils.constants import rank_fields, all_feature_fields, geom_feats, ignore_non_accident_field, accident_count_bins, accident_count_labels, class_model
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 THRESHOLD = 0.5
 NUM_WORKERS = 4
 
-reg_loss_fns = {
-    'mse': torch.nn.MSELoss(),
-    'mae': torch.nn.L1Loss(),
-    'huber': torch.nn.HuberLoss(),
-    'poisson': torch.nn.PoissonNLLLoss()
-}
 
-def macro_mae(y_true, y_pred):
-    # Round predictions to the nearest integer
-    return macro_averaged_mean_absolute_error(y_true, torch.round(y_pred))
-
-criteria_fns = {
-    'MAE': mean_absolute_error,
-    'MSE': mean_squared_error,
-    'RMSE': partial(mean_squared_error, squared=False),
-    'Macro MAE': macro_mae,
-    'R2': r2_score,
-    'Accuracy': accuracy_score,
-    'Macro Recall': balanced_accuracy_score,
-    'F1': f1_score,
-    'Micro F1': partial(f1_score, average='micro'),
-    'Weighted F1': partial(f1_score, average='weighted'),
-    'MCC': matthews_corrcoef
-}
-
-def poissonLoss(xbeta, y):
-    """Custom loss function for Poisson model."""
-    loss=torch.mean(torch.exp(xbeta)-y*xbeta)
-    return loss
-
-
-def convert_accident_counts(tensor_data, categorize, bins=[0, 1, 2, 3, 5, np.inf]):
+def convert_accident_counts(tensor_data, categorize, bins=accident_count_bins):
     if categorize == 'classification':
-        labels = ['No Accidents', 'One Accident', 'Two Accidents', 'Few Accidents', 'Many Accidents']
+        labels = accident_count_labels
     elif categorize == 'regression':
         labels = [0., 1., 2., 3., 4.]
         labels = [torch.tensor(label) for label in labels]  
@@ -101,12 +64,11 @@ def load_data(
     target_field,
     categorize=None,
     include_feats=None,
-    cat_feats=[],
     add_deg_feats=False,
     scaler='power',
     clean=True,
     dist=50,
-    agg='sum',
+    agg='min',
     split=0.8,
     batch_size=64,
     split_approach=None,
@@ -125,7 +87,6 @@ def load_data(
         categorize (str, optional): Classification strategy
             Options: ['classification', 'multiclass', 'regression'],
         include_feats (list, optional),
-        cat_feats (list, optional),
         add_deg_feats (bool, optional),
         scaler (str, optional): Type of Normalization scaler to use
             Options: ['sum', 'minmax', 'maxabs', 'robust', 'power']
@@ -142,7 +103,8 @@ def load_data(
         verbose (bool, optional)
     """
     # Only graphs with meridian_class have been saved, so forcibly load that graph and remove the feats later
-    cat_fields = ['meridian_class'] if target_field == 'accident_count' else cat_feats
+    # Remove the following two lines to unrestrict
+    cat_fields = ['meridian_class'] if target_field == 'accident_count' else []
     clean_agg = 'sum' if target_field == 'meridian_class' else agg
     data = load_graph(place,
                       feature_fields=all_feature_fields,
@@ -156,25 +118,26 @@ def load_data(
                       verbose=True)
     if target_field == 'accident_count':
         data[target_field] = convert_accident_counts(data[target_field], categorize)
+        data.classes = accident_count_labels
 
     if 'degree' in include_feats:
         add_deg_feats = True
         include_feats = remove_item(include_feats, 'degree')
     
-    for cat_feat in cat_feats:
-        include_feats = remove_item(include_feats, cat_feat)
-        # Convert to categorical
-        include_feats += [attr for attr in data.node_attrs if attr.startswith(cat_feat)]
+    node_attrs = data.node_attrs
+    cat_attrs = []
+    for feat in include_feats:
+        if feat not in node_attrs:
+            # Assume categorical
+            include_feats = remove_item(include_feats, feat)
+            # Convert to category-based features that start with same name
+            cat_attrs += [attr for attr in node_attrs if attr.startswith(feat)]
+    include_feats += cat_attrs
     
     # Reduce data.x to only include_feats if desired
-    node_attrs = data.node_attrs
     if include_feats is not None and include_feats != node_attrs:
-        feat_idx = torch.tensor([node_attrs.index(feat) for feat in include_feats])
-        feat_idx = feat_idx.to(data.x.device)
-        data.num_nodes = data.x.size(0)
-        data.x = torch.index_select(data.x, 1, feat_idx).float() \
-                if len(feat_idx) > 0 else None
-
+        filter_feats(data, include_feats)
+    
     if torch.is_tensor(data[target_field][0]):
         if categorize == 'multiclass':
             # Multiclass classification
@@ -211,7 +174,7 @@ def load_data(
         data.classes = enc.classes_
     
     transform = T.Compose([
-        NormalizeFeatures(scaler=scaler),
+        NormalizeFeatures(scaler=scaler, feat_scaler_dict={attr: 'none' for attr in cat_attrs}),
         T.LocalDegreeProfile() if add_deg_feats else (lambda x: x),
         T.ToDevice(device) if split_approach != 'saint' else (lambda x: x),
         T.RandomNodeSplit(num_val=(1 - split), num_test=0)
@@ -364,9 +327,8 @@ def run(
         'split_approach': 'cluster'
     },
     model_args = {
-        'model_type': 'gat',
-        'hidden_channels': 10,
-        'num_layers': 2,
+        **class_model,
+        'hidden_channels': 20,
     },
     seed=42,
     num_iter=5,
@@ -503,12 +465,6 @@ def run(
         
         sec_per_epoch = (time.time() - start_time) / epochs
         
-        result_df = pd.DataFrame.from_records([{
-            key: result_dict[key][-1]
-            for key in result_dict
-            if len(result_dict[key]) > 0
-        }])
-        
         # Obtain inductive metrics post-training
         if inductive_place is not None:
             _, inductive_metrics = test(model, inductive_loader, criterion,
@@ -516,10 +472,8 @@ def run(
             for idx, metric in enumerate(inductive_metrics):
                 inductive_crit_name = f'Inductive {test_criteria_names[idx]}'
                 result_dict[inductive_crit_name] = metric
-                result_df[inductive_crit_name] = metric
         
         print(f'Iteration {iter_no} done, averaged {sec_per_epoch:.3f}s per epoch. Results:')
-        display(result_df)
         result_dict['sec_per_epoch'] = sec_per_epoch
         result_dict['model_details'] = model.__repr__()
         result_dict['model_parameters'] = num_params
@@ -528,5 +482,7 @@ def run(
         if early_stopping:
             model = early_stopper.load_checkpoint(model)
         models.append(model)
+
+    display_results(results)
     
     return models, results

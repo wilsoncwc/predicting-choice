@@ -90,7 +90,6 @@ def construct_ssx_dataset(places, **kwargs):
 
 
 def main():
-    all_feat_fields = [field for field in all_feature_fields]
     for agg in [
         'min',
         'max',
@@ -99,26 +98,15 @@ def main():
         'median',
         'std'
     ]:
-        data = load_graph(remove_item(included_places, inductive_places),
-                          feature_fields=all_feature_fields,
-                          cat_fields=['meridian_class'],
-                          force_connected=True, 
-                          approach='dual',
-                          clean=True,
-                          clean_agg=agg,
-                          target_field='accident_count',
-                          verbose=True,
-                          save_file=f'accident_transductive_cut_{agg}_pyg.pt')
-        data = load_graph(inductive_places,
-                  feature_fields=all_feature_fields,
-                  cat_fields=['meridian_class'],
-                  force_connected=True, 
-                  approach='dual',
-                  clean=True,
-                  clean_agg=agg,
-                  target_field='accident_count',
-                  verbose=True,
-                  save_file=f'accident_inductive_cut_{agg}_pyg.pt')
+        dataset = construct_ssx_dataset(included_places, 
+                                        feature_fields=all_feature_fields, 
+                                        approach='primal', 
+                                        clean=False, 
+                                        agg=agg, 
+                                        verbose=True)
+        for data in dataset:
+            data.node_attrs = list(data.node_attrs)
+        torch.save(dataset, f'{dataset_root}/ssx_dataset_{agg}.pt')
 
 if __name__ == '__main__':
     main()
@@ -140,10 +128,10 @@ net_df.to_pickle(f'{dataset_root}/network_df_w_stats.pt')
         data.node_attrs = list(data.node_attrs)
     torch.save(dataset, f'{dataset_root}/ssx_dataset_clean_min.pt')
     
-    all_feat_fields = [field for field in all_feature_fields]
+    dist = 15
     for agg in [
-        'max',
         'min',
+        'max',
         'sum',
         'mean',
         'median',
@@ -156,9 +144,11 @@ net_df.to_pickle(f'{dataset_root}/network_df_w_stats.pt')
                           approach='dual',
                           clean=True,
                           clean_agg=agg,
-                          target_field='meridian_class',
+                          target_field='accident_count',
+                          dist=dist,
                           verbose=True,
-                          save_file=f'accident_transductive_cut_{agg}_pyg.pt')
+                          reset=True,
+                          save_file=f'accident_transductive_{dist}_{agg}_pyg.pt')
         data = load_graph(inductive_places,
                   feature_fields=all_feature_fields,
                   cat_fields=['meridian_class'],
@@ -166,7 +156,9 @@ net_df.to_pickle(f'{dataset_root}/network_df_w_stats.pt')
                   approach='dual',
                   clean=True,
                   clean_agg=agg,
-                  target_field='meridian_class',
+                  target_field='accident_count',
+                  dist=dist,
                   verbose=True,
-                  save_file=f'accident_inductive_cut_{agg}_pyg.pt')
+                  reset=True,
+                  save_file=f'accident_inductive_{dist}_{agg}_pyg.pt')
 """

@@ -28,13 +28,19 @@ def visualize_graph(place, approach='primal', feature=None, title=None, save_pat
         gdf.plot(ax=ax)
     plt.tight_layout()
     
-def visualize_nx(graph, ax=None, **kwargs):
+def visualize_nx(graph, ax=None, remove_self_loops=True, **kwargs):
+    if remove_self_loops:
+        graph.remove_edges_from(nx.selfloop_edges(graph))
     if ax is None:
         _, ax = plt.subplots(1, 1, figsize=(10,10))
-    nx.draw(graph, {n:[n[0], n[1]] for n in list(graph.nodes)}, ax=ax, **kwargs)
+    nx.draw_networkx(graph,
+                     ax=ax,
+                     with_labels=False,
+                     pos={n:[n[0], n[1]] for n in list(graph.nodes)},
+                     **kwargs)
     
 
-def plot_loss_curve(losses, label, ax=None, color=None, show_std=True):
+def plot_loss_curve(losses, label, ax=None, color=None, show_std=True, annotate_last=True, **plot_kwargs):
     if ax is None:
         _, ax = plt.subplots(1, 1, figsize=(10, 10))
         ax.set_title('Validation Loss over training')
@@ -47,7 +53,7 @@ def plot_loss_curve(losses, label, ax=None, color=None, show_std=True):
     
     if color is None:
         color = 'g'
-    # Plot learning curve
+    # Plot learning curve and error margin 
     if show_std:
         ax.fill_between(
             epochs,
@@ -57,8 +63,14 @@ def plot_loss_curve(losses, label, ax=None, color=None, show_std=True):
             color=color,
         )
     ax.plot(
-        epochs, losses_mean, "o-", color=color, label=label
+        epochs, losses_mean, color=color, label=label, **plot_kwargs
     )
+    
+    if annotate_last:
+        last_value = losses_mean[-1]
+        ax.annotate('%0.3f' % last_value, xy=(1, last_value), xytext=(8, 0), 
+                 xycoords=('axes fraction', 'data'), textcoords='offset points')
+        
     ax.legend(loc="best")
 
     return ax

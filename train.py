@@ -6,7 +6,8 @@ import pandas as pd
 
 import torch
 import torch_geometric.transforms as T
-from torch_geometric.loader import DataLoader   
+from torch_geometric.loader import DataLoader
+from torch_geometric.data import Batch
 from torch.utils.tensorboard import SummaryWriter
 from IPython.display import display
 
@@ -14,18 +15,18 @@ from sklearn.metrics import roc_auc_score, average_precision_score
 from sklearn.metrics import f1_score, precision_score, recall_score
 
 from models.init_model import init_model
-from utils.utils import *
-from utils.seed import seed_everything
+from utils import *
 from utils.constants import project_root, dataset_root
 from utils.constants import rank_fields, metric_dict, default_model
 from utils.constants import GLOBAL_THRESHOLD
 from utils.normalize_features import NormalizeFeatures
+from utils.custom_link_split import CustomLinkSplit
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-def process_dataset(full_dataset, split=0.8, split_labels=True, hold_out_edge_ratio=0.2,
-                    neg_sampling_ratio=-1, batch_size=32, include_feats=[], scaler='power',
-                    add_deg_feats=False, deg_after_split=False, verbose=False):
+def process_dataset(full_dataset, split=0.8, hold_out_edge_ratio=0.2,
+                    neg_sampling_ratio=-1, batch_size=64, include_feats=[], scaler='quantile-normal',
+                    feat_scaler_dict={}, add_deg_feats=False, deg_after_split=False, verbose=False):
     """
         Set split < 0 to indicate that only the first graph should be used for training
     """
@@ -48,23 +49,19 @@ def process_dataset(full_dataset, split=0.8, split_labels=True, hold_out_edge_ra
         include_feats = remove_item(include_feats, 'degree')
         
     # Remove non included features
-    node_attrs = dataset[0].node_attrs
-    if include_feats != node_attrs:
-        feat_idx = torch.tensor([node_attrs.index(feat) for feat in include_feats])
-        for data in dataset:
-            data.num_nodes = data.x.size(0)
-            data.x = torch.index_select(data.x, 1, feat_idx).float() \
-                     if len(feat_idx) > 0 else None
+    for data in dataset:
+        if include_feats != data.node_attrs:
+            filter_feats(data, include_feats)
     
     # If no features are selected, inject degree profile as features
     # else, normalize the features
     neg_sampling_ratio = neg_sampling_ratio if neg_sampling_ratio >= 0 else 1 / hold_out_edge_ratio
     transform = T.Compose([
-        NormalizeFeatures(scaler=scaler),
+        NormalizeFeatures(scaler=scaler, feat_scaler_dict=feat_scaler_dict),
         T.LocalDegreeProfile() if add_deg_feats and not deg_after_split else (lambda x: x),
         T.ToDevice(device),
-        T.RandomLinkSplit(num_val=0, num_test=0, disjoint_train_ratio=hold_out_edge_ratio,
-                          neg_sampling_ratio=neg_sampling_ratio, split_labels=split_labels, is_undirected=True)
+        CustomLinkSplit(num_val=0, num_test=0, disjoint_train_ratio=hold_out_edge_ratio,
+                          neg_sampling_ratio=neg_sampling_ratio, is_undirected=True)
     ])
 
     train_dataset = [transform(dataset[i])[0] for i in train_idx]
@@ -84,7 +81,7 @@ def process_dataset(full_dataset, split=0.8, split_labels=True, hold_out_edge_ra
     # Load graphs into dataloader
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True) \
         if len(train_dataset) > 0 else []
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False) \
+    test_loader = DataLoader(test_dataset, batch_size=len(test_dataset), shuffle=False) \
         if len(test_dataset) > 0 else []
     if verbose:
         for step, data in enumerate(train_loader):
@@ -125,14 +122,18 @@ def train(model, optimizer, loader, variational, beta=1):
 @torch.no_grad()
 def test(model, loader):
     model.eval()
-    aucs = []
-    aps = []
+    auc_sum, ap_sum, count = 0, 0, 0
     for data in loader:
         z = model.encode(data.x, data.edge_index)
-        auc, ap = model.test(z, data.pos_edge_label_index, data.neg_edge_label_index)
-        aucs.append(auc)
-        aps.append(ap)
-    return np.mean(aucs, axis=0), np.mean(aps, axis=0)
+        out = model.decode(z, data.edge_label_index).view(-1).sigmoid()
+        auc = roc_auc_score(data.edge_label.cpu().numpy(), out.cpu().numpy())
+        ap = average_precision_score(data.edge_label.cpu().numpy(), out.cpu().numpy())
+        
+        num_graphs = data.num_graphs if isinstance(data, Batch) else 1
+        auc_sum += auc * num_graphs
+        ap_sum += ap * num_graphs
+        count += num_graphs
+    return auc_sum / count, ap_sum / count
 
 @torch.no_grad()
 def test_enhanced(model, data):
@@ -198,16 +199,16 @@ def run(
 
     # Format the output filename to which models and results are saved
     model_args['variational'] = model_args['variational'] if 'variational' in model_args else False
-    mod = 'V' if model_args['variational'] else ''
-    mod += 'L' if 'linear' in model_args and model_args['linear'] else ''
-    dist = '-dist' if 'distmult' in model_args and model_args['distmult'] else ''
+#     mod = 'V' if model_args['variational'] else ''
+#     mod += 'L' if 'linear' in model_args and model_args['linear'] else ''
+#     dist = '-dist' if 'distmult' in model_args and model_args['distmult'] else ''
     
-    add_deg_feats = data_process_args.get('add_deg_feats', False)
-    include_feats = data_process_args.get('include_feats', [])
-    tag_tb = f'{"deg+" if add_deg_feats else ""}{len(include_feats)}_{tag_tb}'
-    model_tag = f'G{mod}AE_{model_args["out_channels"]}d_{model_args["model_type"]}{dist}'
-    run_str = f'{model_tag}_{epochs}epochs_{lr}lr_{tag_tb}feats'
-    
+#     add_deg_feats = data_process_args.get('add_deg_feats', False)
+#     include_feats = data_process_args.get('include_feats', [])
+#     tag_tb = f'{"deg+" if add_deg_feats else ""}{len(include_feats)}_{tag_tb}'
+#     model_tag = f'G{mod}AE_{model_args["out_channels"]}d_{model_args["model_type"]}{dist}'
+    run_str = str(list({**data_process_args}.values()))
+        
     # Logging
     results = []
     models = []
@@ -215,6 +216,13 @@ def run(
     for i in range(1, num_iter + 1):
         if verbose:
             print(f'Running iteration {i} of expt {run_str}')
+            
+        if output_tb:
+            # Output average run losses to tensorboard
+            path = f'{project_root}/runs/{run_str}/run_{i}'
+            if verbose:
+                print(f'Writing to {path}')
+            writer = SummaryWriter(path)
         start_time = time.time()
         epoch_start_time = start_time
         
@@ -224,7 +232,7 @@ def run(
         model.data_process_args = data_process_args
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
         if schedule_lr:
-            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=150, 
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=20, 
                                                                    threshold=0.001, factor=0.5, verbose=True)
     
         result_dict = {metric: [] for metric in metric_dict}
@@ -266,6 +274,11 @@ def run(
                 if test_inductive:
                     epoch_feed += f',Test AUC: {test_auc:.4f}, Test AP: {test_ap:.4f}'
                 print(epoch_feed)
+                
+            if output_tb:
+                for metric in result_dict:
+                    result = result_dict[metric][epoch - 1]
+                    writer.add_scalar(metric_dict[metric], result, epoch - 1)
         
         result_df = pd.DataFrame.from_records([{
             key: result_dict[key][-1]
@@ -289,13 +302,13 @@ def run(
         # Output average run losses to tensorboard
         path = f'{project_root}/runs/{run_str}'
         if verbose:
-            print(f'Writing to {path}')
+            print(f'Writing average results to {path}')
         writer = SummaryWriter(path)
-        
         mean_result_dict = {}
         for metric in metric_dict:
             mean_result = np.mean([res[metric] for res in results if metric in res], axis=0)
             if type(mean_result) == list:
+                mean_result_dict[metric] = mean_result[-1]
                 for i, result in enumerate(mean_result):
                     writer.add_scalar(metric_dict[metric], result, i)
             elif type(mean_result) == float:
@@ -303,7 +316,8 @@ def run(
         
         # Log run and model parameters
         data_process_args['include_feats'] = ', '.join(data_process_args['include_feats'])
-        writer.add_hparams({**data_process_args, **model_args},
+        hparams = {**data_process_args, **model_args}
+        writer.add_hparams({key: str(hparams[key]) for key in hparams},
                            mean_result_dict)
     
     if save_best_model or return_best_model:
@@ -382,7 +396,7 @@ def run_all(dataset, run_args={}, save_path=''):
     return result, metrics
         
 
-def run_single(places, full_dataset, run_args={}, save_path='',
+def run_single(places, full_dataset, data_process_args={}, run_args={}, save_path='',
                summarize=True, only_transductive=False, enhanced=True):
     """
         Trainer for individual local authorities.
@@ -393,10 +407,11 @@ def run_single(places, full_dataset, run_args={}, save_path='',
     output_dict = {}
     data_process_args = {
         'split': 0, # indicates ALL data goes into test dataset (0 train)
-        'batch_size': run_args.pop('batch_size', 32),
-        'add_deg_feats': run_args.pop('add_deg_feats', False),
-        'deg_after_split': run_args.pop('deg_after_split', False),
-        'include_feats': run_args.pop('include_feats', rank_fields)
+        'batch_size': 32,
+        'add_deg_feats': False,
+        'deg_after_split': False,
+        'include_feats': rank_fields,
+        **data_process_args,
     }
     _, test_dataset, _, test_loader = process_dataset(full_dataset, verbose=False, **data_process_args)
     # post_run_test_dataset = process_dataset(full_dataset, verbose=False, split_labels=True, 

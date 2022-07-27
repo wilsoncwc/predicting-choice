@@ -17,7 +17,7 @@ def main():
     print(f'Running training on GPU: {torch.cuda.get_device_name(0)}')
     place = remove_item(included_places, inductive_places)
     result_dict = {}
-    filepath = f'{project_root}/meridian_inductive_model_runs.pt'
+    filepath = f'{dataset_root}/meridian_inductive_model_runs.pt'
     for var_args in  [
         {'model_type': 'mlp', 'num_layers': 2},
         {'model_type': 'mlp', 'num_layers': 3},
@@ -26,14 +26,15 @@ def main():
         {'model_type': 'gat', 'num_layers': 2},
         {'model_type': 'sage', 'num_layers': 2, 'aggr': 'min'},
         {'model_type': 'sage', 'num_layers': 2, 'aggr': 'mean'},
+        {'model_type': 'sage', 'num_layers': 2, 'aggr': 'max'},
         {'model_type': 'sage', 'num_layers': 2, 'aggr': 'add'},
         {'model_type': 'gin',  'num_layers': 2},
         {'model_type': 'gain', 'num_layers': 2},
     ]:
             data_process_args = {
-                'split_approach': 'neighbor',
+                'split_approach': 'neighbor', 
                 'batch_size': 4096,
-                'include_feats': unnorm_feature_fields,
+                'include_feats': ['degree'] + og_feature_fields,
                 'clean': False,
                 # **var_args
             }
@@ -72,8 +73,8 @@ class_pred_feat_runs2.pt
 ['degree'],
 rank_fields,
 rank_fields + ['degree'],
-all_feature_fields,
-all_feature_fields + ['degree'],
+og_feature_fields,
+og_feature_fields + ['degree'],
 geom_feats,
 dual_feats
 
@@ -89,7 +90,7 @@ accident_class_pred_feat_runs.pt
         rank_fields,
         log_fields,
         unnorm_feature_fields,
-        all_feature_fields,
+        og_feature_fields,
         
 meridian_class_pred_feat_runs_raw
 ['degree'],
@@ -104,8 +105,8 @@ rank_fields,
 log_fields,
 geom_feats,
 unnorm_feature_fields,
-all_feature_fields,
-all_feature_fields + ['degree'],
+og_feature_fields,
+og_feature_fields + ['degree'],
 dual_feats
 
 {'model_type': 'mlp', 'num_layers': 2},
@@ -119,21 +120,30 @@ dual_feats
 {'model_type': 'sage', 'num_layers': 2, 'aggr': 'add'},
 {'model_type': 'gin',  'num_layers': 2},
 {'model_type': 'gain', 'num_layers': 2},
-    
-{ 'split_approach': 'cluster', 'num_parts': 512, 'batch_size': 2 },
+
+{ 'split_approach': 'cluster', 'num_parts': 256, 'batch_size': 4 },
+{ 'split_approach': 'cluster', 'num_parts': 256, 'batch_size': 8 },
+{ 'split_approach': 'cluster', 'num_parts': 256, 'batch_size': 16 },
 { 'split_approach': 'cluster', 'num_parts': 512, 'batch_size': 4 },
 { 'split_approach': 'cluster', 'num_parts': 512, 'batch_size': 8 },
-{ 'split_approach': 'cluster', 'num_parts': 1024, 'batch_size': 1 },
-{ 'split_approach': 'cluster', 'num_parts': 1024, 'batch_size': 2 },
+{ 'split_approach': 'cluster', 'num_parts': 512, 'batch_size': 16 },
 { 'split_approach': 'cluster', 'num_parts': 1024, 'batch_size': 4 },
 { 'split_approach': 'cluster', 'num_parts': 1024, 'batch_size': 8 },
+{ 'split_approach': 'cluster', 'num_parts': 1024, 'batch_size': 16 },
     
-{ 'split_approach': 'neighbor', 'batch_size': 100 },
-{ 'split_approach': 'neighbor', 'batch_size': 1000 },
-{ 'split_approach': 'neighbor', 'batch_size': 10000 },
-{ 'split_approach': 'saint', 'batch_size': 100 },
-{ 'split_approach': 'saint', 'batch_size': 1000 },
+{ 'split_approach': 'neighbor', 'batch_size': 1024 },
+{ 'split_approach': 'neighbor', 'batch_size': 2048 },
+{ 'split_approach': 'neighbor', 'batch_size': 4096 },
+{ 'split_approach': 'saint', 'batch_size': 5000 },
 { 'split_approach': 'saint', 'batch_size': 10000 },
+{ 'split_approach': 'saint', 'batch_size': 20000 },
 { 'split_approach': 'none' }
 
+
+{ 'split_approach': 'neighbor', 'batch_size': 8192 },
+{ 'split_approach': 'neighbor', 'batch_size': 16384 },
+{ 'split_approach': 'neighbor', 'batch_size': 32768  },
+{ 'split_approach': 'saint', 'batch_size': 40000 },
+{ 'split_approach': 'saint', 'batch_size': 80000 },
+{ 'split_approach': 'saint', 'batch_size': 160000 },
 """

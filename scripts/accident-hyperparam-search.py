@@ -17,31 +17,29 @@ def main():
     print(f'Running training on GPU: {torch.cuda.get_device_name(0)}')
     place = remove_item(included_places, inductive_places)
     result_dict = {}
-    filepath = f'{dataset_root}/accident_model_inductive_runs.pt'
+    filepath = f'{dataset_root}/accident_agg_inductive_15_runs2.pt'
     for var_args in [
-        {'model_type': 'mlp', 'num_layers': 2},
-        {'model_type': 'mlp', 'num_layers': 3},
-        {'model_type': 'mlp', 'num_layers': 4},
-        {'model_type': 'gcn', 'num_layers': 2},
-        {'model_type': 'gat', 'num_layers': 2},
-        {'model_type': 'sage', 'num_layers': 2, 'aggr': 'min'},
-        {'model_type': 'sage', 'num_layers': 2, 'aggr': 'mean'},
-        {'model_type': 'sage', 'num_layers': 2, 'aggr': 'max'},
-        {'model_type': 'sage', 'num_layers': 2, 'aggr': 'add'},
-        {'model_type': 'gin',  'num_layers': 2},
-        {'model_type': 'gain', 'num_layers': 2},
+        'max',
+        'min',
+        'sum',
+        'mean',
+        'median',
+        'std'
     ]:
             data_process_args = {
                 'split_approach': 'cluster',
                 'num_parts': 512,
                 'batch_size': 16,
-                'include_feats': all_feature_fields,
+                'include_feats': og_feature_fields + ['meridian_class'],
                 'categorize': 'multiclass',
                 'clean': True,
-                'agg': 'min'
+                'dist': 15,
+                'agg': var_args
             }
             model_args = {
-                **var_args,
+                'model_type': 'sage',
+                'aggr': 'max',
+                'num_layers': 2,
                 'hidden_channels': 20,
             }
             print(f'Testing {var_args}')
@@ -74,21 +72,20 @@ for agg in [
         'std'
     ]:
 
-['degree'],
-geom_feats,
-['choice2km', 'nodecount2km', 'integration2km'],
-['choice10km', 'nodecount10km', 'integration10km'],
-['choice100km', 'nodecount100km', 'integration100km'],
-['choice2km', 'choice10km', 'choice100km'],
-['integration2km', 'integration10km', 'integration100km'],
-['nodecount2km', 'nodecount10km', 'nodecount100km'],
+km2_fields,
+km10_fields,
+km100_fields,
+choice_fields,
+integration_fields,
+nodecount_fields,
 rank_fields,
-log_fields,
+og_feature_fields,
+['degree'],
+og_feature_fields + ['degree'],
 geom_feats,
-unnorm_feature_fields,
-all_feature_fields,
-all_feature_fields + ['degree'],
-dual_feats
+dual_feats,
+['meridian_class'],
+og_feature_fields + ['meridian_class']
 
 {'model_type': 'mlp', 'num_layers': 2},
 {'model_type': 'mlp', 'num_layers': 3},

@@ -11,11 +11,13 @@ import torch
 from shapely.geometry import Point, LineString
 from itertools import chain
 from numbers import Number
+from sklearn.preprocessing import LabelEncoder
 
+from utils import apply_agg, convert_categorical_features_to_one_hot, remove_item, add_item
 from utils.from_networkx import from_networkx
 from utils.gdf_to_nx import gdf_to_nx
-from utils.utils import apply_agg, convert_categorical_features_to_one_hot
-from utils.constants import dataset_root, save_graph_dict_path, osmnx_buffer, fields_to_ignore
+from utils.remove_false_nodes import remove_false_nodes
+from utils.constants import dataset_root, save_graph_dict_path, gdf_path, osmnx_buffer, fields_to_ignore, sum_fields
 from utils.constants import included_places, full_dataset_label
 from utils.constants import NUM_GEOM
 # Projection
@@ -33,13 +35,14 @@ def proj_and_reorder_bounds(bbox):
 loaded_gdfs = {} # For OSMnx data
 loaded_graphs = {} # To cache graphs
 full_gdf = None
-accident_gdf = None
+full_gdf_has_accidents = False
 saved_data_files = pickle.load(open(save_graph_dict_path, "rb"))
 CLEAN_LIMIT = 10000000
 
 def load_gdf(place,
              accident=False,
-             dist=50, # For accident_count not in ignore_fields 
+             dist=50, # For accident_count not in ignore_fields
+             transform_cols={},
              verbose=True):
     """
     Load the geodataframe (gdf) corresponding to a local authority (SSx)
@@ -52,18 +55,26 @@ def load_gdf(place,
         dist (int, optional): Argument for join distance for accident count field
         verbose (bool, optional): Outputs progression to the console
     """
-    global full_gdf
+    global full_gdf, full_gdf_has_accidents
     
     if full_gdf is None:
         if verbose:
-            print('Reading SSx OpenMapping dataset, this may take a while...')
-        full_gdf = gpd.read_file(f'{dataset_root}/OpenMapping-gb-v1_gpkg/gpkg/ssx_openmapping_gb_v1.gpkg', ignore_fields=fields_to_ignore)
+            print('Reading SSx OpenMapping dataset, this may take a while...', end = '')
+        # full_gdf = gpd.read_file(f'{dataset_root}/OpenMapping-gb-v1_gpkg/gpkg/ssx_openmapping_gb_v1.gpkg', ignore_fields=fields_to_ignore)
+        full_gdf = pd.read_pickle(gdf_path)
+        if verbose:
+            print('Finished')
+        le = LabelEncoder()
+        full_gdf['LA_id'] = le.fit_transform(full_gdf['lad11nm'])
+        full_gdf.LA_classes = le.classes_
 
     if accident:
-        if verbose:
-            print('Constructing SSx-Accident dataset, this may take a while...')
+        if not full_gdf_has_accidents:
+            if verbose:
+                print('Constructing SSx-Accident dataset, this may take a while...')
             # Combine SSx dataset with accidents data
-        full_gdf = construct_accident_dataset(gdf=full_gdf, year_from=2011, year_to=2020, maxdist=dist)
+            full_gdf = construct_accident_dataset(gdf=full_gdf, year_from=2011, year_to=2020, maxdist=dist)
+            full_gdf_has_accidents = True
     
     if type(place) == list and len(place) == 4 and type(place[0]) == float:
         # Read bounding box
@@ -206,6 +217,10 @@ def process_primal_graph(g, feature_fields=[], return_nx=False, agg='mean'):
     """
     Takes SSx metrics from adjacent edges and averages them to form the node attribute
     """
+    # Remove coords as feature (added independently)
+    coord_feats = ['x', 'y', 'lng', 'lat']
+    feature_fields = remove_item(feature_fields, coord_feats)
+    
     for node, d in g.nodes(data=True):
         # get attributes from adjacent edges
         new_data = {field:[] for field in feature_fields}
@@ -290,7 +305,12 @@ def add_latent_feats(G):
         enc_dict[node] = {'z_{i}': z_i for idx, z_i in enumerate(z)}
     nx.set_node_attributes(G, enc_dict)
     
-def clean_gdf(gdf, approach='primal', agg='sum'):
+def clean_gdf(gdf, approach='primal', agg='sum', use_momepy=False):
+    if use_momepy:
+        print('Cleaning graph with momepy...')
+        gdf = remove_false_nodes(gdf, agg=agg)
+        return momepy.gdf_to_nx(gdf, approach=approach, multigraph=False)
+    
     print('Cleaning graph with OSMnx...')
     G = gdf_to_nx(gdf, approach='primal', directed=True)
     for u, d in G.nodes(data=True):
@@ -306,7 +326,10 @@ def clean_gdf(gdf, approach='primal', agg='sum'):
         for key in data:
             attr = data[key]
             if type(attr) == list:
-                data[key] = apply_agg(attr, agg)
+                if key in sum_fields:
+                    data[key] = apply_agg(attr, 'sum')
+                else:
+                    data[key] = apply_agg(attr, agg)
                     
     G = G.to_undirected()
     
@@ -328,6 +351,7 @@ def load_graph(
     approach='primal',
     agg='min',
     clean=True,
+    use_momepy=False,
     clean_agg='min',
     dist=50, # applies only to accident count feature
     geoms=True, # applies only to dual graph
@@ -335,7 +359,7 @@ def load_graph(
     reset=False,
     return_nx=False,
     save_file=None,
-    verbose=False
+    verbose=True
 ):
     """
     Loads and preprocesses a PyTorch Geometric Data, or a networkx graph,
@@ -367,24 +391,19 @@ def load_graph(
         if verbose:
             print(f'Loaded graph from saved file at {path}')
         return torch.load(path)
-    
-    ignore_fields = [field for field in fields_to_ignore \
-                        if field not in [*feature_fields, *cat_fields, target_field]]
+
     if from_gdf is None:
         accident = 'accident_count' in [*feature_fields, *cat_fields, target_field] 
         gdf = load_gdf(place, verbose=verbose, accident=accident, dist=dist)
+        feature_fields = feature_fields + cat_fields + ['LA_id']
     else:
         gdf = from_gdf
-
-    if len(cat_fields) > 0:
-        gdf, new_cols = convert_categorical_features_to_one_hot(gdf, cat_fields)
-        feature_fields = feature_fields + new_cols
         
     if clean:
-        G = clean_gdf(gdf, approach=approach, agg=clean_agg)
+        G = clean_gdf(gdf, approach=approach, agg=clean_agg, use_momepy=use_momepy)
     else:
         G = momepy.gdf_to_nx(gdf, approach=approach, multigraph=False)
-
+        
     if force_connected:
         G = G.subgraph(max(nx.connected_components(G), key=len))
         
@@ -395,13 +414,18 @@ def load_graph(
     if approach == 'primal':
         G = process_primal_graph(G, feature_fields, return_nx=return_nx, agg=agg)
         expected_node_attrs = set(feature_fields + ['x', 'y', 'lng', 'lat'])
-        features = feature_fields + ['x', 'y']
+        features = add_item(feature_fields, ['x', 'y'])
     elif approach == 'dual':
         G, features = process_dual_graph(G, feature_fields,
                                          target_field=target_field,
                                          return_nx=return_nx,
                                          geoms=geoms)
         expected_node_attrs = features
+    
+    if len(cat_fields) > 0:
+        G, new_cols = convert_categorical_features_to_one_hot(G, cat_fields)
+        features = remove_item(features, cat_fields)
+        features = add_item(features, new_cols)
 
     if verbose:
         print(f'Generated graph with {G.number_of_nodes()} nodes and {G.number_of_edges()} edges')

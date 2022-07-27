@@ -13,7 +13,7 @@ from train import run_single
 from utils.constants import dataset_root
 
 def main():
-    dataset = torch.load(f'{dataset_root}/ssx_dataset_clean_min.pt')
+    dataset = torch.load(f'{dataset_root}/ssx_dataset_min.pt')
     places = [data.place for data in dataset]
     half = len(places) // 2
     places = places[half:]
@@ -23,19 +23,21 @@ def main():
         'distmult': True,
         'out_channels': 10
     }
+    data_process_args = {
+        'include_feats': ['x', 'y'],
+    }
     run_hyperparams = {
         'seed': 42,
         'model_args': model_params,
         'num_iter': 5,
         'lr': 0.01,
-        'epochs': 2000,
+        'epochs': 500,
         'print_every': 10,
-        'add_deg_feats': False,
         'schedule_lr': True,
-        'include_feats': ['integration2kmrank', 'integration10kmrank'],
     }
-    run_single(places, dataset, run_args=run_hyperparams, only_transductive=True,
-               save_path=f'{dataset_root}/link_pred/transductive_clean_min_primal_2.pt')
+    run_single(places, dataset, run_args=run_hyperparams, 
+               data_process_args=data_process_args, only_transductive=False,
+               save_path=f'{dataset_root}/link_pred/quantile_norm2.pt')
 
 if __name__ == '__main__':
     main()
