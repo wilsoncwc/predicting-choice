@@ -1,5 +1,5 @@
 geopandas==0.10.2
-jupyterlab==3.2.8
+jupyterlab==3.6.7
 matplotlib==3.5.1
 momepy==0.5.2
 torch==1.10.2
